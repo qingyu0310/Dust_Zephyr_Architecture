@@ -49,7 +49,7 @@ struct KeyboardState
     uint16_t last_raw_all = 0;
     uint16_t keyboard_mode = 0;
 
-    void Process(Keyboard& current_output, Keyboard& current_raw)
+    void Process(Keyboard& current_output, const Keyboard& current_raw)
     {
         uint16_t trigger = current_raw.all & (~last_raw_all);
         uint16_t toggle_mask = keyboard_mode;
@@ -70,6 +70,14 @@ inline float normChannel(int16_t v, int16_t center, int16_t max)
     return r;
 }
 
+inline float normChannelInv(int16_t v, int16_t center, float inv_max_dist)
+{
+    float r = (static_cast<float>(v) - static_cast<float>(center)) * inv_max_dist;
+    if (r >  1.0f) r =  1.0f;
+    if (r < -1.0f) r = -1.0f;
+    return r;
+}
+
 inline float normMouse(float v, float scale)
 {
     constexpr float kInvNorm = 1.0f / 32767.0f;
@@ -80,7 +88,7 @@ inline float normMouse(float v, float scale)
 }
 
 template<typename OutData>
-inline void processChannel(topic::remote_to::Message& pub, OutData od)
+inline void processChannel(topic::remote_to::Message& pub, const OutData& od)
 {
     pub.chassisy = od.keyboard.w ? 1.0f : od.keyboard.s ? -1.0f : od.ch.chassisy;
     pub.chassisx = od.keyboard.a ? 1.0f : od.keyboard.d ? -1.0f : od.ch.chassisx;

@@ -40,6 +40,16 @@ config COM_CAN
     help
         启动 CAN 驱动。需要 board DTS 配置 CAN 节点并使能对应 CAN 控制器驱动。
 
+config COM_RS485
+    default n
+    bool "RS485 半双工驱动"
+    select SERIAL
+    select UART_ASYNC_API
+    select GPIO
+    help
+        启用 RS485 半双工驱动，使用 UART_ASYNC_API 接收，
+        发送时通过方向 GPIO 控制 DE/RE 引脚。
+
 config COM_CAN_STBY
     default n
     bool "CAN STBY 引脚初始化"

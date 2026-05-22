@@ -33,11 +33,6 @@
 	current-speed = <100000>;
 	pinctrl-0 = <&pinmux_uart4_rx>;
 	pinctrl-names = "default";
-	uart-idle-trgm-reg = <0xF033C000>;
-	uart-idle-trgm-pin = <17>;
-	uart-idle-trgm-input-src = <0x15>;
-	uart-idle-trgm-output-gptmr-in = <0x19>;
-	uart-idle-trgm-output-gptmr-sync = <0x1B>;
 	uart-idle-gptmr-reg = <0xF000C000>;
 	uart-idle-gptmr-clock-name = <CLOCK_GPTMR3>;
 	dmas = <&hdma 2 0x1C>, <&hdma 3 0x1D>;

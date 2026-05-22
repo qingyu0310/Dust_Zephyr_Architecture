@@ -101,8 +101,6 @@ bool validate(const uint8_t* buffer, uint8_t len)
 
 bool decode(const uint8_t* buffer, uint8_t len, Message& pub)
 {
-    if (!validate(buffer, len)) return false;
-
     uint16_t ch0 = ( buffer[0]       | (buffer[1] << 8)) & 0x07FF;
     uint16_t ch1 = ((buffer[1] >> 3) | (buffer[2] << 5)) & 0x07FF;
     uint16_t ch2 = ((buffer[2] >> 6) | (buffer[3] << 2)  | (buffer[4] << 10)) & 0x07FF;
@@ -120,12 +118,12 @@ bool decode(const uint8_t* buffer, uint8_t len, Message& pub)
     int16_t dz   = buffer[10] | (buffer[11] << 8);
 
     constexpr int16_t kCenter = 1024;
-    constexpr int16_t kMax    = 1684;
+    constexpr float   kInvChannelSpan = 1.0f / 660.0f;
 
-    od.ch.chassisx = normChannel(ch0, kCenter, kMax);
-    od.ch.chassisy = normChannel(ch1, kCenter, kMax);
-    od.ch.yaw      = normChannel(ch2, kCenter, kMax);
-    od.ch.pitch    = normChannel(ch3, kCenter, kMax);
+    od.ch.chassisx = normChannelInv(ch0, kCenter, kInvChannelSpan);
+    od.ch.chassisy = normChannelInv(ch1, kCenter, kInvChannelSpan);
+    od.ch.yaw      = normChannelInv(ch2, kCenter, kInvChannelSpan);
+    od.ch.pitch    = normChannelInv(ch3, kCenter, kInvChannelSpan);
 
     constexpr float kMouseScaleX = 30.0f;
     constexpr float kMouseScaleY = 2.0f;

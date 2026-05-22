@@ -75,9 +75,9 @@ public:
             return false;
         }
 
-        uint8_t first;
-        uint8_t second;
-        uint8_t third;
+        uint8_t first  = 0;
+        uint8_t second = 0;
+        uint8_t third  = 0;
         map_color(color, first, second, third);
 
         const unsigned int key = irq_lock();

@@ -1,143 +1,140 @@
-# HPM5361 UART 链路排查状态
+# HPM5361 UART 当前最终实现说明
 
-日期：2026-05-21
+日期：2026-05-23
 
 ## 当前结论
 
-HPM5361 上 `remote -> dr16` 异常的核心问题，不在应用层协议解析，也不在 `uart.cpp` 的 Zephyr async 回调封装本身。
+当前 HPM5361 上的遥控器接收链路已经进入可用的最终状态：
 
-已经确认：
+- UART4 接收正常
+- DMA 搬运正常
+- UART 硬件 RX idle 提前切帧正常
+- 应用层已经可以稳定收到完整的 `18` 字节 DR16 帧
 
-- `UART4_RX -> DMA搬运 -> DMA完成回调 -> UART_RX_RDY -> uart.cpp -> remote.cpp -> dr16.cpp`
-  这条链路是通的。
-- 不通的是：
-  `UART4_RX -> UART RX idle 检测 -> 提前 flush DMA -> 小块 UART_RX_RDY`
+也就是说，当前问题已经不再是“UART 底层收不到”或者“DMA 只能等满 128B 才上报”，而是已经切换到：
 
-也就是说，现在数据能收上来，但不是按帧/按 idle 切出来，而是经常等 DMA buffer 满了以后整块往上推。
+`UART4 RX -> DMA -> UART 硬件 RX idle -> 提前 flush -> UART_RX_RDY -> uart.cpp -> remote.cpp`
 
-## 已确认的现象
+目前剩余的性能差距主要在应用层，不在 UART 底层。
 
-### 1. 应用层不是首要问题
+## 当前底层实现
 
-`STM32` 板子同样的应用层能正常工作，说明：
+相关文件：
 
-- `modules/remotes/remote.cpp`
-- `modules/remotes/dr16/dr16.cpp`
-- `drivers/communication/uart/uart.cpp`
+- `D:\Zephyr_HPMicro\sdk_glue\drivers\serial\uart_hpmicro.c`
 
-这些代码结构本身不是首要根因。
+当前采用的是 **UART 硬件 RX idle + DMA 提前 flush** 的实现方式。
 
-### 2. DMA 回调链是通的
+核心逻辑如下：
 
-调试时看到过：
+1. 打开 UART async RX + DMA
+2. 配置 UART 硬件 RX idle 检测
+3. 当 UART 判定 RX 进入 idle：
+   - 暂停 DMA
+   - 清除 idle 标志
+   - 读取当前 DMA 已经收到的数据长度
+   - 触发 `UART_RX_RDY`
+   - 如有下一个 buffer，则切换到下一个 buffer
+   - 恢复 DMA 与 idle 检测
 
-- `dma_cb ch=2 status=0`
-- `UART_RX_RDY off=0 len=128`
-- `remote.cpp` 能持续 `Read()`
-- `dr16.cpp` 能进入 `dataprocess()`
+### 当前关键参数
 
-说明：
+- DMA RX buffer：`128`
+- DR16 单帧长度：`18`
+- UART 硬件 idle 阈值：当前为较保守但稳定的配置
 
-- UART4 确实在收数据
-- DMA 确实在搬数据
-- Zephyr async callback 确实在往上发事件
+### 当前主路径
 
-### 3. 现在的回调节奏是“满 buffer 才上报”
+当前稳定工作的主路径是 UART 自身的硬件 idle 中断，不再依赖最初那条不稳定的“TRGM 软件 idle”为主路径。
 
-典型现象：
+GPTMR 相关代码仍然保留在驱动中，但当前稳定切帧依赖的是 UART 硬件 idle。
 
-- `128 bytes, 4 reads`
-- `frame_pos` 每次按 `2` 递增
+## 当前应用层行为
 
-这说明：
+相关文件：
 
-- 一次处理拿到的是完整 `128B` DMA 缓冲
-- `remote.cpp` 只是因为每次 `Read()` 读 `32B`，所以变成 `4 reads`
-- `frame_pos += 2` 本质上是 `128 mod 18 = 2`
+- [uart.cpp](D:\Zephyr\projects\tflm\drivers\communication\uart\uart.cpp)
+- [remote.cpp](D:\Zephyr\projects\tflm\modules\remotes\remote.cpp)
+- [dr16.cpp](D:\Zephyr\projects\tflm\modules\remotes\dr16\dr16.cpp)
 
-也就是说，当前行为不是“18B 一帧一回调”，而是“128B 满缓冲后一次性回调”。
+当前应用层行为是：
 
-### 4. UART IRQ 入口会进，但 idle 不命中
+1. 底层驱动产生 `UART_RX_RDY`
+2. `UartDma` 将收到的数据写入软件缓冲区
+3. `remote.cpp` 通过信号量被唤醒
+4. `Remote::Task()` 读取数据并交给协议解析
+5. DR16 解析能够在稳定状态下按完整一帧处理
 
-排查时已经看到：
+当前已经观察到的稳定现象是：
 
-- `uart_hpm_isr()` 入口日志会出现
-- 但 `idle=0`
-- 没有命中 `idle-hit`
-
-这说明：
-
-- UART 中断入口不是完全没连上
-- 但 `UART RX idle flag` 没有按预期触发
-- 真正把数据推上层的仍然是 DMA 满缓冲回调
-
-## 对 HPM5361 的关键判断
-
-### 1. 原始 TRGM/GPTMR 软件 idle 路径不成立
-
-已经确认板上 `UART4_RX` 只接到了 `PA17`。
-
-虽然官方 `HPM5361` 头文件里：
-
-- `PA17` 可以配置成 `UART4_RXD`
-- `PA17` 也可以配置成 `TRGM0_P_05`
-
-但这是同一个 PAD 的两种复用，不是同时生效。
-
-因此：
-
-- 当 `PA17` 配成 `UART4_RXD` 时
-- `TRGM0_P5` 这条输入链路并没有同时成立
-
-所以基于 `TRGM + GPTMR` 的软件 idle 检测，对这块板当前接法不可靠。
-
-### 2. 已改成“硬件 RX idle 优先，软件 idle 兜底”
-
-当前 `D:\Zephyr_HPMicro\sdk_glue\drivers\serial\uart_hpmicro.c` 已经改成：
-
-- 如果 HPM UART IP 支持 `RX idle detect`
-- 就优先走 `UART` 外设自己的 `RX idle`
-- 保留旧 `TRGM/GPTMR` 路径作为兜底
-
-这是按 HPM UART IP 能力做的通用底层适配，不是只给 `5361` 加板子分支。
-
-## 目前卡住的位置
-
-当前真正卡住的位置是：
-
-`UART RX idle 检测 -> 提前 flush DMA`
-
-具体表现为：
-
-- idle 路径没有把 `128B` 打散成接近 `18B` 的小块回调
-- 最终上层看到的仍然是 `128 bytes, 4 reads`
-
-所以当前的根问题，不是“收不到”，而是：
-
-**收得到，但没有按 idle/按帧边界及时切出来。**
-
-## 当前可用的工程性绕法
-
-如果把 DMA buffer 改成固定 `18B`，现象会变成：
-
-- `18 bytes, 1 reads`
+- 每次 flush 出来的是完整 `18` 字节
+- 上层一次 `Read()` 就能读出一帧
+- `frame_pos = 0`
 
 这说明：
 
-- 应用层可以在固定帧长模式下恢复正常节奏
-- 但这只是绕开 idle 机制，不代表底层 idle 问题已经真正解决
+- 帧边界已经在底层切齐
+- 应用层不再长期积压残余字节
 
-## 当前建议
+## 当前时钟环境
 
-后续排查重点应该继续盯：
+运行时确认到的频率如下：
 
-- HPM UART `RX idle` 标志为什么没有按预期生效
-- 为什么最终总是由 `DMA满缓冲` 触发上报，而不是 `idle` 提前触发
+- `cpu0 = 480 MHz`
+- `ahb = 160 MHz`
+- `uart4 = 800 MHz`
+- `gptmr3 = 100 MHz`
 
-如果目标是先让 DR16 稳定可用，固定帧长 DMA 是短期可落地方案。
+因此，当前 HPM 路径比 STM32 慢，不能简单归因于“主频不够”。
 
-如果目标是把 HPM Zephyr UART async 底层彻底修好，就要继续解决：
+## 当前性能认识
 
-`UART RX idle flag -> flush DMA`
+现在 UART 底层已经不是主要瓶颈。
 
-这一步。
+已经确认的事实：
+
+- RX 链路正常
+- 提前切帧正常
+- 不再退化成 `128B` 满缓冲上报
+
+当前主要耗时已经转移到：
+
+- `remote.cpp` 的应用层处理
+- 协议 `decode`
+- `zbus_chan_pub()`
+
+也就是说，当前若继续优化时延，重点应放在应用层，不是 UART 驱动层。
+
+## 当前限制
+
+虽然底层已经可用，但目前仍有几个现实限制：
+
+1. 端到端应用层耗时仍明显高于 STM32 参考实现
+2. `zbus` 发布开销不小
+3. 协议处理在 HPM5361 上仍然占据较明显的时间
+
+所以当前状态可以定义为：
+
+- **功能正确**
+- **链路稳定**
+- **底层可交付**
+- **性能还可继续优化**
+
+## 后续如果再次验证
+
+后续如果要重新确认这套实现是否仍然正确，建议重点看下面几项：
+
+1. DR16 是否仍然稳定按 `18` 字节一帧上报
+2. `remote.cpp` 是否还能保持 `frame_pos = 0`
+3. 是否重新退化回 `128B` 满缓冲后才上报
+4. UART 硬件 idle 是否仍然是主切帧路径
+
+## 最终说明
+
+当前 HPM5361 的 UART 底层已经达到“当前最终实现说明”所需的状态：
+
+- 可以稳定工作
+- 可以稳定切帧
+- 可以支撑 DR16 正常上层解析
+
+后续如果还要继续追时间，应该主要从应用层继续下手，而不是再回到 UART 底层反复排查。

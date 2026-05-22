@@ -19,13 +19,9 @@
 
 #include <string.h>
 
-#include <zephyr/sys/printk.h>
-
 using namespace topic::remote_to;
 
 namespace thread::remote {
-
-static bool remote_ready_ = false;
 
 /**
  * @brief 带状态机的遥控器解码与自动识别 worker。
@@ -40,12 +36,12 @@ public:
      * @brief 固定协议模式和自动识别共用的协议描述项。
      */
     struct Protocol {
-        RemoteType type;          // 协议类型，用于记录当前锁定的遥控器来源。
-        const char *name;         // 调试日志中显示的协议名称。
-        uint16_t frame_size;      // 该协议单帧长度，滑窗和消费缓冲区时使用。
-        ValidateFunc validate;    // 只判断当前窗口是否像本协议合法帧，不修改发布数据。
-        DecodeFunc decode;        // 将合法帧解码到 topic::remote_to::Message，不直接发布。
-        uint8_t lock_score;       // 连续命中多少帧后才锁定该协议，用于降低误识别概率。
+        RemoteType    type;             // 协议类型，用于记录当前锁定的遥控器来源。
+        const char    *name;            // 调试日志中显示的协议名称。
+        uint16_t      frame_size;       // 该协议单帧长度，滑窗和消费缓冲区时使用。
+        ValidateFunc  validate;         // 只判断当前窗口是否像本协议合法帧，不修改发布数据。
+        DecodeFunc    decode;           // 将合法帧解码到 topic::remote_to::Message，不直接发布。
+        uint8_t       lock_score;       // 连续命中多少帧后才锁定该协议，用于降低误识别概率。
     };
 
     /**
@@ -66,8 +62,8 @@ public:
     void Init(RemoteType type, RxStream &uart)
     {
         configured_type_ = type;
-        active_type_ = RemoteType::None;
-        detect_state_ = DetectState::Detecting;
+        active_type_     = RemoteType::None;
+        detect_state_    = DetectState::Detecting;
         k_sem_init(&rx_sem_, 0, 1);
         uart_ = &uart;
         uart_->SetNotify(&rx_sem_);
@@ -105,11 +101,11 @@ private:
     Message  pub_   {};
     Protocol proto_ {};
     uint8_t  hit_count_[kProtocolCount] {};
-    uint8_t  fail_count_    = 0;
-    uint32_t last_valid_ms_ = 0;
+    uint8_t  fail_count_     = 0;
+    uint32_t last_valid_ms_  = 0;
     uint16_t min_frame_size_ = 0;
     uint16_t max_frame_size_ = 0;
-
+    
     void InitFrameSizeRange();
     void GetProcessFunc();
     const Protocol *FindProtocol(RemoteType type);
@@ -136,16 +132,18 @@ private:
 /**
  * @brief 自动识别使用的协议优先级表。
  *
- * 帧特征更强的协议优先尝试。DR16 没有固定帧头，
+ * 帧特征更强的协议优先尝试（即越靠前的协议被锁的优先级更高）
  * 因此需要连续多帧命中后才允许锁定。
+ * 最后一个常量为协议置信度，为n时，则为正确协议 n 次才开始锁定
  */
-static constexpr Remote::Protocol kProtocolTable[] = {
+static constexpr Remote::Protocol kProtocolTable[] {
     { RemoteType::VT13, "VT13", vt13::kFrameSizeVT13, vt13::validate, vt13::decode, 1 },
     { RemoteType::VT12, "VT12", vt12::kFrameSizeVT12, vt12::validate, vt12::decode, 2 },
     { RemoteType::DR16, "DR16", dr16::kFrameSizeDR16, dr16::validate, dr16::decode, 3 },
 };
 
 static Remote remote_ {};
+static bool remote_ready_ = false;
 
 /**
  * @brief 初始化 UART DMA，并将遥控器解码器配置为自动识别模式。
@@ -155,9 +153,9 @@ void thread_init()
     static UartDma rx {};
     RxStream::Config cfg {};
 
-    // HPM UART RX idle 还不可靠，DMA buf 太大会等满包才通知，直接拉高遥控器延迟。
-    // 这里用小分片及时唤醒线程，完整帧由 Remote::frame_buf_ 继续拼接。
-    constexpr uint16_t kBufferSize = 8;
+    // HPM UART4 uses the low-level RX idle fallback to flush DMA early.
+    // Keep the DMA buffer large enough to avoid full-buffer interrupt pressure.
+    constexpr uint16_t kBufferSize = 128;
     constexpr uint16_t kTimeour    = 1000;
 
     cfg.buf_size   = kBufferSize;
@@ -325,7 +323,7 @@ void Remote::HandleLocked()
     {
         if (proto_.validate(frame_buf_, proto_.frame_size))
         {
-            if (proto_.decode(frame_buf_, proto_.frame_size, pub_))
+            if (proto_.decode(frame_buf_, proto_.frame_size, pub_)) 
             {
                 // 锁定后只有完整合法帧才刷新有效时间，超时逻辑据此判断遥控器是否断连。
                 last_valid_ms_ = k_uptime_get_32();
@@ -366,7 +364,8 @@ void Remote::HandleDetecting()
         {
             const Protocol& protocol = kProtocolTable[i];
             if (frame_pos_ < protocol.frame_size) continue;
-            if (!protocol.validate(frame_buf_, protocol.frame_size)) continue;
+            bool valid = protocol.validate(frame_buf_, protocol.frame_size);
+            if (!valid) continue;
 
             matched = true;
             hit_count_[i]++;
@@ -397,7 +396,8 @@ void Remote::HandleDetecting()
             break;
         }
 
-        if (!matched) {
+        if (!matched) 
+        {
             if (frame_pos_ < max_frame_size_) {
                 // 还没攒到最长帧时先不丢字节，避免把长帧前半段误当噪声丢掉。
                 break;
@@ -468,24 +468,14 @@ void Remote::Task()
     {
         if (k_sem_take(&rx_sem_, K_MSEC(50)) == 0) {
             uint8_t tmp[32];
-            uint32_t start = k_cycle_get_32();
-            uint32_t total_bytes = 0;
-            uint32_t read_count = 0;
-
             while (true) {
                 uint16_t n = uart_->Read(tmp, sizeof(tmp));
                 if (n == 0) {
                     break;
                 }
 
-                total_bytes += n;
-                read_count++;
                 ProcessChunk(tmp, n);
             }
-
-            uint32_t cost_us = k_cyc_to_us_floor32(k_cycle_get_32() - start);
-            printk("%u us, %u bytes, %u reads, frame_pos=%u\n",
-                   cost_us, total_bytes, read_count, frame_pos_);
         }
         else
         {

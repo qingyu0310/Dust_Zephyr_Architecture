@@ -53,8 +53,6 @@ bool validate(const uint8_t* buffer, uint8_t len)
 
 bool decode(const uint8_t* buffer, uint8_t len, Message& pub)
 {
-    if (!validate(buffer, len)) return false;
-
     static KeyboardState keyboard_state_{};
 
     OutputData od{};

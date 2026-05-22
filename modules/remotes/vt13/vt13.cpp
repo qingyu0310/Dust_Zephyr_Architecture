@@ -114,8 +114,6 @@ bool validate(const uint8_t* buffer, uint8_t len)
 
 bool decode(const uint8_t* buffer, uint8_t len, Message& pub)
 {
-    if (!validate(buffer, len)) return false;
-
     const RawData* raw_data = reinterpret_cast<RawData const*>(buffer);
 
     static KeyboardState keyboard_state_{};
@@ -123,19 +121,19 @@ bool decode(const uint8_t* buffer, uint8_t len, Message& pub)
     OutputData od{};
 
     constexpr int16_t kCenter = 1024;
-    constexpr int16_t kMax    = 1684;
+    constexpr float   kInvChannelSpan = 1.0f / 660.0f;
 
-    od.ch.chassisx  = normChannel(raw_data->channel_0, kCenter, kMax);
-    od.ch.chassisy  = normChannel(raw_data->channel_1, kCenter, kMax);
-    od.ch.yaw       = normChannel(raw_data->channel_2, kCenter, kMax);
-    od.ch.pitch     = normChannel(raw_data->channel_3, kCenter, kMax);
+    od.ch.chassisx  = normChannelInv(raw_data->channel_0, kCenter, kInvChannelSpan);
+    od.ch.chassisy  = normChannelInv(raw_data->channel_1, kCenter, kInvChannelSpan);
+    od.ch.yaw       = normChannelInv(raw_data->channel_2, kCenter, kInvChannelSpan);
+    od.ch.pitch     = normChannelInv(raw_data->channel_3, kCenter, kInvChannelSpan);
 
     od.sw.fn1       = raw_data->fn_1;
     od.sw.fn2       = raw_data->fn_2;
     od.sw.trigger   = raw_data->trigger;
     od.sw.pause     = raw_data->pause;
     od.sw.cns       = raw_data->cns;
-    od.sw.wheel     = normChannel(raw_data->wheel, kCenter, kMax);
+    od.sw.wheel     = normChannelInv(raw_data->wheel, kCenter, kInvChannelSpan);
 
     constexpr float kMouseScaleX = 30.0f;
     constexpr float kMouseScaleY = 2.0f;
