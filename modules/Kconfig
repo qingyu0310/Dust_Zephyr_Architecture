@@ -34,6 +34,9 @@ config MOD_DEV_IMU
     default n
     select FLT_QUATERNION_EKF
     select TPC_IMU_TO
+    select DEV_PWM
+    select CTL_PID
+    select CTL_TIMER
     help
         IMU source decoupling, attitude EKF and zbus publish layer.
 

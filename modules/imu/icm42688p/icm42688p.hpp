@@ -54,6 +54,7 @@ public:
      * @brief 初始化 SPI、校验芯片 ID 并按需执行自动标定
      */
     bool Init() override;
+    bool Calibrate() override;
 
     /**
      * @brief 返回最近一次驱动错误码
@@ -63,8 +64,8 @@ public:
 private:
     static constexpr float kAccel16gSensitivity     = 16.0f / 32768.0f;
     static constexpr float kGyro2000Sensitivity     = 0.0010652644360316953f;
-    static constexpr float kTemperatureSensitivity  = 1.0f / 132.48f;
-    static constexpr float kTemperatureOffset       = 25.0f;
+    static constexpr float kTemperatureSensitivity  = 1.0f / 512.0f;
+    static constexpr float kTemperatureOffset       = 23.0f;
     static constexpr float kGravity                 = 9.8f;
 
     bool  SoftReset          ();
@@ -85,8 +86,12 @@ private:
     Spi spi_ {};
     Error last_error_ = Error::None;
     uint8_t current_segment_ = 0xFFU;
-    uint8_t tx_[16] {};
-    uint8_t rx_[16] {};
+    
+    // ICM42688P 当前最大单次 SPI 事务为连续读 12 字节运动数据加 1 字节命令，
+    // 这里额外留出少量余量，统一使用 16 字节缓冲区。
+    static constexpr uint32_t kSpiBufferSize = 16U;
+    uint8_t tx_[kSpiBufferSize] {};
+    uint8_t rx_[kSpiBufferSize] {};
 };
 
 /**
@@ -97,6 +102,6 @@ Icm42688p& Instance();
 /**
  * @brief 根据 devicetree alias 构造 ICM42688P 配置
  */
-bool RegisterFromDevicetree(uint32_t period_ms = 1, bool auto_calibration = true);
+bool RegisterFromDevicetree(uint32_t period_ms = 1);
 
 } // namespace icm42688p

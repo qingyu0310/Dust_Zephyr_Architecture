@@ -24,11 +24,6 @@ static Thread<2048> thread_{};
 
 static Output led_alert{};
 
-static void led_cycle()
-{
-    led_alert.Toggle();
-}
-
 static void Task(void*, void*, void*)
 {
     static constexpr uint32_t kPeriodMs = 1;
@@ -38,14 +33,11 @@ static void Task(void*, void*, void*)
     {
         const int64_t tick_start = k_uptime_get();
 
-        timer.Update();
-        timer.Clock(([](){
+        // timer.Update();
 
-            printk("hello\n");
-
-        }));
-
-        // led_cycle();
+        // timer.Clock(([](){
+        //     led_alert.Toggle();
+        // }));
 
         const int64_t elapsed = k_uptime_get() - tick_start;
         const int64_t remain  = static_cast<int64_t>(kPeriodMs) - elapsed;
@@ -71,7 +63,7 @@ namespace thread::input {
 
 static Thread<> thread_{};
 
-/*  占位：预留用于按键/传感器输入，待实现  */
+/*  占位：预留用于按键/传感器输入，待实现 */
 static void Task(void*, void*, void*)
 {
     for (;;)

@@ -41,6 +41,7 @@ constexpr float kInitialCovariance[36] {
 };
 
 constexpr float kRadToDeg = 57.295779513f;
+constexpr float kYawBiasStaticThreshold = 0.02f;
 
 float Clamp(float value, float min_value, float max_value)
 {
@@ -204,7 +205,21 @@ void QuaternionEkf::Update(const Sample& sample)
     state_.q[3] = filter_.FilteredValue[3];
     state_.GyroBias[0] = filter_.FilteredValue[4];
     state_.GyroBias[1] = filter_.FilteredValue[5];
-    state_.GyroBias[2] = 0.0f;
+
+    /*
+     * yaw 没有磁力计等绝对航向观测时，本质上还是靠 gz 积分。
+     * 这里在静止判定成立时，缓慢把 z 轴零偏拉向当前测得的角速度，
+     * 这样至少能压住温漂/残余零偏带来的持续 yaw 漂移。
+     */
+    if (state_.StableFlag &&
+        fabsf(state_.Gyro[0]) < config_.stable_gyro_threshold &&
+        fabsf(state_.Gyro[1]) < config_.stable_gyro_threshold &&
+        fabsf(state_.Gyro[2]) < kYawBiasStaticThreshold) {
+        const float bias_limit = config_.bias_correction_limit * state_.dt;
+        const float bias_error = sample.gyro[2] - state_.GyroBias[2];
+        state_.GyroBias[2] += Clamp(bias_error, -bias_limit, bias_limit);
+    }
+
     state_.Gyro[0] = sample.gyro[0] - state_.GyroBias[0];
     state_.Gyro[1] = sample.gyro[1] - state_.GyroBias[1];
     state_.Gyro[2] = sample.gyro[2] - state_.GyroBias[2];

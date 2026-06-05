@@ -11,16 +11,6 @@
 #include <cstdint>
 
 /**
- * @brief IMU 数据源类型
- */
-enum class ImuType : uint8_t
-{
-    BMI088 = 0,
-    ICM42688P,
-    None,
-};
-
-/**
  * @brief 一帧 IMU 工程量样本
  *
  * 具体 IMU 驱动负责完成寄存器读取、单位换算与驱动侧校准，
@@ -51,6 +41,11 @@ public:
      * @brief 读取一帧工程量样本
      */
     virtual bool Read(Sample& sample) = 0;
+
+    /**
+     * @brief 按当前驱动配置执行一次静态校准
+     */
+    virtual bool Calibrate() { return true; }
 
     /**
      * @brief 返回建议的线程轮询周期，单位 ms

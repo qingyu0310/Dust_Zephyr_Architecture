@@ -1,37 +1,37 @@
-# drivers/Kconfig — 底层硬件驱动抽象
+# drivers/Kconfig - 底层硬件驱动抽象
 # 提供 GPIO/PWM/UART/CAN 等外设驱动，以及 printk/shell 调试通道
 # 每个 config 直接 select 对应的 Zephyr 子系统驱动符号
-# 头文件在 drivers/communication/ 和 drivers/ 下
+
 config DEV_GPIO
     default n
-    bool "启动GPIO简单操作的设备类"
+    bool "Enable simple GPIO device wrapper"
     select GPIO
     help
-        启动GPIO简单操作的设备类
+        Enable the lightweight GPIO wrappers in drivers/device/gpio.
 
-# config DEV_PWM
-#     default n
-#     bool "启动PWM简单操作的设备类"
-#     select PWM
-#     help
-#         启动PWM简单操作的设备类
+config DEV_PWM
+    default n
+    bool "Enable simple PWM device wrapper"
+    select PWM
+    help
+        Enable the lightweight PWM wrapper in drivers/device/pwm.
 
 config COM_UART
     default n
-    bool "UART 中断驱动（双缓冲）"
+    bool "UART interrupt driver"
     select SERIAL
     select UART_INTERRUPT_DRIVEN
     select UART_ASYNC_API
     help
-        启动 UART 中断驱动，带双缓冲 ping-pong 接收
+        Enable the UART interrupt driver with ping-pong receive buffering.
 
 config COM_UART_DMA
     default n
-    bool "UART DMA 驱动（异步接收）"
+    bool "UART DMA driver"
     select SERIAL
     select UART_ASYNC_API
     help
-        异步 DMA UART 驱动，使用 UART_ASYNC_API 回调接收 + 阻塞发送
+        Enable the asynchronous DMA UART driver.
 
 config COM_SPI
     default n
@@ -43,26 +43,24 @@ config COM_SPI
 
 config COM_CAN
     default n
-    bool "CAN 驱动"
+    bool "CAN driver"
     select CAN
     help
-        启动 CAN 驱动。需要 board DTS 配置 CAN 节点并使能对应 CAN 控制器驱动。
+        Enable the CAN driver. Board DTS must provide the CAN controller node.
 
 config COM_RS485
     default n
-    bool "RS485 半双工驱动"
+    bool "RS485 half-duplex driver"
     select SERIAL
     select UART_ASYNC_API
     select GPIO
     help
-        启用 RS485 半双工驱动，使用 UART_ASYNC_API 接收，
-        发送时通过方向 GPIO 控制 DE/RE 引脚。
+        Enable the RS485 half-duplex driver using UART_ASYNC_API and a DE/RE GPIO.
 
 config COM_CAN_STBY
     default n
-    bool "CAN STBY 引脚初始化"
+    bool "Initialize CAN STBY pin"
     depends on COM_CAN
     select GPIO
     help
-        初始化 CAN 收发器 STBY 引脚为低电平（正常模式）。
-        引脚定义在 board DTS overlay 中。
+        Initialize the CAN transceiver STBY pin from board DTS overlay.

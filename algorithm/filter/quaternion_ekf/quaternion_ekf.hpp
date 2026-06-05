@@ -66,6 +66,7 @@ public:
         uint64_t UpdateCount = 0;
 
         float q[4]                 {1.0f, 0.0f, 0.0f, 0.0f};
+        /* x/y 由 Kalman 状态估计，z 由静止时的缓慢在线零偏修正维护。 */
         float GyroBias[3]          {0.0f, 0.0f, 0.0f};
         /* Gyro 为扣除零偏后的角速度，Accel 为低通后的加速度。 */
         float Gyro[3]              {0.0f, 0.0f, 0.0f};
@@ -104,9 +105,9 @@ public:
     void Update(const Sample& sample);
 
     const State& GetState() const { return state_; }
-    State&       GetState() { return state_; }
+    State&       GetState()       { return state_; }
     const filter::KalmanFilter& Filter() const { return filter_; }
-    filter::KalmanFilter&       Filter() { return filter_; }
+    filter::KalmanFilter&       Filter()       { return filter_; }
 
 private:
     static constexpr uint8_t kStateSize       = 6;

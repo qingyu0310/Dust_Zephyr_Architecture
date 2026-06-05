@@ -64,7 +64,7 @@ Bmi088& Instance()
 /**
  * @brief 通过板级 alias 构造 BMI088 Source 配置
  */
-bool RegisterFromDevicetree(uint32_t period_ms, bool auto_calibration)
+bool RegisterFromDevicetree(uint32_t period_ms)
 {
     constexpr uint32_t kSpiOperation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_MODE_CPOL | SPI_MODE_CPHA;
 
@@ -75,7 +75,6 @@ bool RegisterFromDevicetree(uint32_t period_ms, bool auto_calibration)
     cfg.accel = &accel;
     cfg.gyro  = &gyro;
     cfg.common.period_ms = period_ms;
-    cfg.common.auto_calibration = auto_calibration;
 
     for (uint8_t axis = 0; axis < 3; axis++) 
     {
@@ -127,11 +126,12 @@ bool Bmi088::Init()
         return false;
     }
 
-    if (common_config_.auto_calibration) {
-        return AutoCalibrate();
-    }
-
     return true;
+}
+
+bool Bmi088::Calibrate()
+{
+    return AutoCalibrate();
 }
 
 /**
@@ -143,9 +143,9 @@ bool Bmi088::ReadRaw(ImuRawSample& raw)
     uint8_t gyro_raw[6] {};
     uint8_t temp_raw[2] {};
 
-    if (!ReadAccel(reg::kAccXoutL, accel_raw, sizeof(accel_raw)) ||
-        !ReadGyro(reg::kGyroXoutL, gyro_raw, sizeof(gyro_raw))   ||
-        !ReadAccel(reg::kAccTempM, temp_raw, sizeof(temp_raw))) 
+    if (!ReadAccel(reg::kAccXoutL,  accel_raw, sizeof(accel_raw)) ||
+        !ReadGyro (reg::kGyroXoutL, gyro_raw,  sizeof(gyro_raw))  ||
+        !ReadAccel(reg::kAccTempM,  temp_raw,  sizeof(temp_raw))) 
     {
         last_error_ = Error::ReadFailed;
         return false;

@@ -59,6 +59,7 @@ public:
      * @brief 初始化 BMI088 两个子器件并按需执行自动标定
      */
     bool Init() override;
+    bool Calibrate() override;
 
     /**
      * @brief 返回最近一次驱动错误码
@@ -93,8 +94,11 @@ private:
     Spi accel_ {};
     Spi gyro_  {};
     Error last_error_ = Error::None;
-    uint8_t tx_[8] {};
-    uint8_t rx_[8] {};
+
+    // BMI088 当前最大单次 SPI 事务为 accel 连读 6 字节数据加 2 字节开销。
+    static constexpr uint32_t kSpiBufferSize = 8U;
+    uint8_t tx_[kSpiBufferSize] {};
+    uint8_t rx_[kSpiBufferSize] {};
 };
 
 /**
@@ -105,6 +109,6 @@ Bmi088& Instance();
 /**
  * @brief 根据 devicetree alias 构造 BMI088 配置
  */
-bool RegisterFromDevicetree(uint32_t period_ms = 1, bool auto_calibration = true);
+bool RegisterFromDevicetree(uint32_t period_ms = 1);
 
 } // namespace bmi088

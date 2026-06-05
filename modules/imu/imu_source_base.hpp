@@ -20,7 +20,7 @@
 struct ImuRawSample
 {
     int16_t accel[3] = {0, 0, 0};
-    int16_t gyro[3] = {0, 0, 0};
+    int16_t gyro [3] = {0, 0, 0};
     int16_t temperature = 0;
 };
 
@@ -29,10 +29,10 @@ struct ImuRawSample
  */
 struct ImuCalibration
 {
-    float gyro_offset[3]  = {0.0f, 0.0f, 0.0f};
-    float gyro_scale[3]   = {1.0f, 1.0f, 1.0f};
+    float gyro_offset [3] = {0.0f, 0.0f, 0.0f};
+    float gyro_scale  [3] = {1.0f, 1.0f, 1.0f};
     float accel_offset[3] = {0.0f, 0.0f, 0.0f};
-    float accel_scale[3]  = {1.0f, 1.0f, 1.0f};
+    float accel_scale [3] = {1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -42,7 +42,6 @@ struct ImuCommonConfig
 {
     ImuCalibration static_calibration {};
     uint32_t period_ms = 1;
-    bool auto_calibration = true;
     uint16_t calibration_samples = 200;
     uint32_t calibration_settle_ms = 50;
 };
@@ -111,16 +110,21 @@ protected:
     /**
      * @brief 复用的启动阶段自动标定流程
      *
-     * 流程包括：
-     * - 采样求平均陀螺零偏
-     * - 按重力模长修正加速度零偏
+     * 在 IMU 静止条件下采集多帧原始样本，估计：
+     * - 陀螺零偏（各轴均值，静止时应为 0）
+     * - 加速度零偏（实测均值与理论重力向量之差）
+     *
+     * @param gravity 当地重力加速度值（单位与 ConvertAccel 一致）
+     * @return 标定是否成功
      */
     bool AutoCalibrateCommon(float gravity)
     {
-        if (!common_config_.auto_calibration || common_config_.calibration_samples == 0) {
+        // 无需校准 samples 数为 0，直接跳过。
+        if (common_config_.calibration_samples == 0) {
             return true;
         }
 
+        // 校准阶段直接读取原始样本求静态均值，不经过当前保存的 offset/scale。
         if (common_config_.calibration_settle_ms > 0) {
             SleepMs(common_config_.calibration_settle_ms);
         }
@@ -128,7 +132,8 @@ protected:
         float gyro_sum [3] = {0.0f, 0.0f, 0.0f};
         float accel_sum[3] = {0.0f, 0.0f, 0.0f};
 
-        for (uint16_t sample_idx = 0; sample_idx < common_config_.calibration_samples; sample_idx++) 
+        // 累积 calibration_samples 帧原始样本（已换算为工程量）。
+        for (uint16_t sample_idx = 0; sample_idx < common_config_.calibration_samples; sample_idx++)
         {
             ImuRawSample raw {};
             if (!ReadRaw(raw)) {
@@ -143,6 +148,7 @@ protected:
             SleepMs(common_config_.period_ms);
         }
 
+        // 求均值 —— 陀螺均值即零偏（静止时理论值 = 0）。
         const float inv_samples = 1.0f / static_cast<float>(common_config_.calibration_samples);
         float accel_mean[3] = {0.0f, 0.0f, 0.0f};
         float accel_norm_sq = 0.0f;
@@ -153,7 +159,9 @@ protected:
             accel_norm_sq   += accel_mean[axis] * accel_mean[axis];
         }
 
-        if (accel_norm_sq > 0.0f) 
+        // 加速度零偏 = 实测均值 - 理论重力向量。
+        // 理论重力向量 = 均值方向上的单位向量 × 当地重力标量。
+        if (accel_norm_sq > 0.0f)
         {
             const float accel_norm = sqrtf(accel_norm_sq);
             const float gravity_scale = gravity / accel_norm;

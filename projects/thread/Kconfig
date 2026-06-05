@@ -75,7 +75,7 @@ config TRD_IMU
     select MOD_DEV_IMU
     select TPC_IMU_TO
     help
-      Enable IMU acquisition and publish thread.
+      Enable IMU acquisition, heater control, and publish thread.
 
 ######################################################
 

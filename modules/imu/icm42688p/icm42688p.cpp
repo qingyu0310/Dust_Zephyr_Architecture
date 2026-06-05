@@ -31,13 +31,13 @@ constexpr uint8_t kPwrCtrlEnableAccelGyro = 0x0F;
  * @brief 当前已确认的通用寄存器初始化表
  */
 constexpr RegConfig kInitConfig[] {
-    {reg::kComCfg,       reg::kComCfgDefault},
-    {reg::kHpfLpfCfg,    reg::kHpfLpfCfgDefault},
-    {reg::kStepCfg,      reg::kStepCfgDefault},
-    {reg::kAccConf,      reg::kAccConfDefault},
-    {reg::kAccRange,     reg::kAccRangeDefault},
-    {reg::kGyrConf,      reg::kGyrConfDefault},
-    {reg::kFifoDowns,    reg::kFifoDownsDefault},
+    {reg::kComCfg,       reg::kComCfgDefault    },
+    {reg::kHpfLpfCfg,    reg::kHpfLpfCfgDefault },
+    {reg::kStepCfg,      reg::kStepCfgDefault   },
+    {reg::kAccConf,      reg::kAccConfDefault   },
+    {reg::kAccRange,     reg::kAccRangeDefault  },
+    {reg::kGyrConf,      reg::kGyrConfDefault   },
+    {reg::kFifoDowns,    reg::kFifoDownsDefault },
 };
 
 static Icm42688p icm42688p_ {};
@@ -55,16 +55,15 @@ Icm42688p& Instance()
 /**
  * @brief 通过板级 alias 构造 ICM42688P Source 配置
  */
-bool RegisterFromDevicetree(uint32_t period_ms, bool auto_calibration)
+bool RegisterFromDevicetree(uint32_t period_ms)
 {
     constexpr uint32_t kSpiOperation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_MODE_CPOL | SPI_MODE_CPHA;
 
-    static const struct spi_dt_spec imu = SPI_DT_SPEC_GET(DT_ALIAS(icm42688p), kSpiOperation, 0);
+    static const struct spi_dt_spec imu = SPI_DT_SPEC_GET(DT_ALIAS(spi_imu), kSpiOperation, 0);
 
     Icm42688p::Config cfg {};
     cfg.spi = &imu;
     cfg.common.period_ms = period_ms;
-    cfg.common.auto_calibration = auto_calibration;
 
     icm42688p_.Configure(cfg);
     return true;
@@ -133,7 +132,12 @@ bool Icm42688p::Init()
         return false;
     }
 
-    if (common_config_.auto_calibration && !AutoCalibrate()) {
+    return true;
+}
+
+bool Icm42688p::Calibrate()
+{
+    if (!AutoCalibrate()) {
         printk("ICM42688P: Auto calibration failed\n");
         return false;
     }
@@ -196,7 +200,8 @@ bool Icm42688p::InitRegisters()
         return false;
     }
 
-    for (const auto& cfg : kInitConfig) {
+    for (const auto& cfg : kInitConfig) 
+    {
         if (!WriteChecked(cfg.reg, cfg.value)) {
             return false;
         }

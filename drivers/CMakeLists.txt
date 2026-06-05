@@ -2,6 +2,8 @@ if(CONFIG_DEV_GPIO)
 	target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/device/gpio)
 endif()
 
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/device/pwm)
+
 if(CONFIG_COM_UART OR CONFIG_COM_UART_DMA)
 	target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/communication/uart/uart.cpp)
 	target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/communication/uart)

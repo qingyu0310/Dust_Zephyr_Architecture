@@ -1,15 +1,28 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/clock/hpm5361-clocks.h>
+#include "dt-bindings/pinctrl/hpmicro-pinctrl-common.h"
+#include <zephyr/dt-bindings/pwm/pwm.h>
 
 / {
 	aliases {
 		user-can1 =  &mcan0;
 		uart-remote = &uart4;
-		icm42688p = &icm42688p;
+		spi-imu = &icm42688p;
+		imu-pwm = &imu_pwm;
 	};
 
 	chosen {
 		zephyr,console = &uart3;
+	};
+
+	pwmheaters {
+		compatible = "pwm-leds";
+
+		imu_pwm: imu_pwm {
+			pwms = <&pwm0 7 PWM_USEC(1000) PWM_POLARITY_NORMAL>;
+			label = "ICM42688P Heater";
+			status = "okay";
+		};
 	};
 };
 
@@ -30,7 +43,7 @@
 };
 
 &mcan0 {
-	pinctrl-0 = <&pinmux_mcan0_txrx_local>;
+	pinctrl-0 = <&pinmux_mcan0_txrx>;
 	pinctrl-names = "default";
 	bitrate = <1000000>;
 	status = "okay";
@@ -71,63 +84,12 @@
 	};
 };
 
-&pinctrl {
-	pinmux_gpiob_spi: pinmux_gpiob_spi {
-		group0 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 14), IOC_TYPE_IOC, 0, 0)>,
-				 <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 15), IOC_TYPE_IOC, 0, 0)>;
-			input-enable;
-		};
-	};
-
-	pinmux_mcan0_txrx_local: pinmux_mcan0_txrx_local {
-		group0 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 0), IOC_TYPE_IOC, 0, 7)>,
-				 <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 1), IOC_TYPE_IOC, 0, 7)>;
-		};
-	};
-
-	pinmux_spi2_local: pinmux_spi2_local {
-		group0 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 10), IOC_TYPE_IOC, 0, 5)>;
-			bias-pull-up;
-			slew-rate = "fast";
-			slew-pd = "200M";
-			drive-strength = "r110";
-		};
-
-		group1 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 11), IOC_TYPE_IOC, 0, 5)>;
-			input-enable;
-			slew-rate = "fast";
-			slew-pd = "200M";
-			drive-strength = "r110";
-		};
-
-		group2 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 12), IOC_TYPE_IOC, 0, 5)>;
-			input-enable;
-			input-schmitt-enable;
-			slew-rate = "fast";
-			slew-pd = "200M";
-			drive-strength = "r110";
-		};
-
-		group3 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 13), IOC_TYPE_IOC, 0, 5)>;
-			slew-rate = "fast";
-			slew-pd = "200M";
-			drive-strength = "r110";
-		};
-	};
-
-	pinmux_uart3: pinmux_uart3 {
-		group0 {
-			pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTA, 14), IOC_TYPE_IOC, 0, 2)>,
-				 <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTA, 15), IOC_TYPE_IOC, 0, 2)>;
-			input-enable;
-		};
-	};
+&pwm0 {
+	pinctrl-0 = <&pinmux_pwm0_p7>;
+	pinctrl-names = "default";
+	period-init = <1000>;
+	dead-zone-in-half-cycle = <0>;
+	status = "okay";
 };
 
 &mtimer {
