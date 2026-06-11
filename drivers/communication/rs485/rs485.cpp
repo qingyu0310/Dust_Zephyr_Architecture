@@ -7,10 +7,10 @@
  */
 
 #include "rs485.hpp"
-
+#include <zephyr/logging/log.h>
 #include <string.h>
 
-#ifdef CONFIG_COM_RS485
+LOG_MODULE_REGISTER(rs485, LOG_LEVEL_INF);
 
 /**
  * @brief UART 事件回调（RS485 内部使用）
@@ -93,23 +93,30 @@ bool Rs485::Init(const struct device* dev, const Config& cfg)
     tx_busy_     = false;
 
     if (!device_is_ready(dev_)) {
+        LOG_ERR("device not ready %s", dev->name);
         return false;
     }
 
     if (dir_ != nullptr) {
         if (!device_is_ready(dir_->port)) {
+            LOG_ERR("dir gpio not ready");
             return false;
         }
         if (gpio_pin_configure_dt(dir_, GPIO_OUTPUT_INACTIVE) != 0) {
+            LOG_ERR("dir gpio config fail");
             return false;
         }
         if (!SetDirection(rx_level_)) {
+            LOG_ERR("set direction fail");
             return false;
         }
     }
 
     int ret = uart_callback_set(dev_, rs485_uart_callback, this);
-    if (ret < 0) return false;
+    if (ret < 0) {
+        LOG_ERR("callback_set fail %d", ret);
+        return false;
+    }
 
     uint16_t bs = cfg.buf_size > kMaxBufSize ? kMaxBufSize : cfg.buf_size;
     if (bs == 0) {
@@ -118,9 +125,13 @@ bool Rs485::Init(const struct device* dev, const Config& cfg)
 
     dma_buf_size_ = bs;
     ret = uart_rx_enable(dev_, dma_buf_[0], dma_buf_size_, rx_timeout_);
-    if (ret < 0) return false;
+    if (ret < 0) {
+        LOG_ERR("rx_enable fail %d", ret);
+        return false;
+    }
 
     ready_ = true;
+    LOG_INF("rs485 ready %s", dev->name);
     return true;
 }
 
@@ -137,11 +148,20 @@ void Rs485::SetNotify(struct k_sem* sem)
  */
 uint16_t Rs485::Read(uint8_t* buf, uint16_t max_len)
 {
-    uint16_t cnt = 0;
-    while (cnt < max_len && tail_ != head_) {
-        buf[cnt++] = rx_buf_[tail_];
-        tail_ = (tail_ + 1) % sizeof(rx_buf_);
+    uint16_t available = (head_ - tail_ + sizeof(rx_buf_)) % sizeof(rx_buf_);
+    uint16_t cnt = (max_len < available) ? max_len : available;
+
+    if (cnt > 0) {
+        uint16_t to_end = sizeof(rx_buf_) - tail_;
+        if (cnt <= to_end) {
+            memcpy(buf, &rx_buf_[tail_], cnt);
+        } else {
+            memcpy(buf, &rx_buf_[tail_], to_end);
+            memcpy(buf + to_end, &rx_buf_[0], cnt - to_end);
+        }
+        tail_ = (tail_ + cnt) % sizeof(rx_buf_);
     }
+
     return cnt;
 }
 
@@ -227,4 +247,3 @@ void Rs485::StoreRx(const uint8_t* data, uint16_t len)
     }
 }
 
-#endif // CONFIG_COM_RS485

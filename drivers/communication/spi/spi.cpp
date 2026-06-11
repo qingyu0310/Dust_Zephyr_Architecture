@@ -7,10 +7,18 @@
  */
 
 #include "spi.hpp"
+#include <zephyr/logging/log.h>
 
+LOG_MODULE_REGISTER(spi, LOG_LEVEL_INF);
+
+/**
+ * @brief 通过设备树初始化 SPI
+ * @param spec  SPI 设备树描述（总线 + 配置）
+ */
 bool Spi::Init(const struct spi_dt_spec& spec)
 {
     if (!spi_is_ready_dt(&spec)) {
+        LOG_ERR("spi not ready");
         return false;
     }
 
@@ -20,6 +28,9 @@ bool Spi::Init(const struct spi_dt_spec& spec)
     tx_set_.count   = 1;
     rx_set_.buffers = &rx_buf_;
     rx_set_.count   = 1;
+
+    LOG_INF("spi ready");
+
     return true;
 }
 

@@ -39,7 +39,6 @@ static void Task(void*, void*, void*)
             printk("tick\n");
         }));
 
-
         const int64_t elapsed = k_uptime_get() - tick_start;
         const int64_t remain  = static_cast<int64_t>(kPeriodMs) - elapsed;
         if (remain > 0) {

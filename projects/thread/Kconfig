@@ -4,7 +4,6 @@ rsource "../../drivers/Kconfig"
 rsource "../../algorithm/Kconfig"
 rsource "../../modules/Kconfig"
 rsource "../../topic/Kconfig"
-rsource "../../cmd/shell/Kconfig"
 
 ######################################################
 
@@ -99,7 +98,7 @@ config TRD_PC
 
 config USER_TEST_ADD
     bool "User test add config"
-    default y
+    default n
     select COM_RS485
     help
       Temporary user test switch.

@@ -8,6 +8,9 @@
 
 #include "uart.hpp"
 #include <string.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(uart, LOG_LEVEL_INF);
 
 #ifdef CONFIG_COM_UART
 
@@ -42,6 +45,7 @@ bool Uart::Init(const struct device* dev, const Config& cfg)
 {
     dev_ = dev;
     if (!device_is_ready(dev_)) {
+        LOG_ERR("device not ready %s", dev->name);
         return false;
     }
 
@@ -51,6 +55,7 @@ bool Uart::Init(const struct device* dev, const Config& cfg)
 
     uart_irq_callback_user_data_set(dev_, uart_irq_handler, this);
     uart_irq_rx_enable(dev_);
+    LOG_INF("uart ready %s", dev->name);
     return true;
 }
 
@@ -67,11 +72,20 @@ void Uart::SetNotify(struct k_sem* sem)
  */
 uint16_t Uart::Read(uint8_t* buf, uint16_t max_len)
 {
-    uint16_t cnt = 0;
-    while (cnt < max_len && tail_ != head_) {
-        buf[cnt++] = rx_buf_[tail_];
-        tail_ = (tail_ + 1) % kMaxBufSize;
+    uint16_t available = (head_ - tail_ + kMaxBufSize) % kMaxBufSize;
+    uint16_t cnt = (max_len < available) ? max_len : available;
+
+    if (cnt > 0) {
+        uint16_t to_end = kMaxBufSize - tail_;
+        if (cnt <= to_end) {
+            memcpy(buf, &rx_buf_[tail_], cnt);
+        } else {
+            memcpy(buf, &rx_buf_[tail_], to_end);
+            memcpy(buf + to_end, &rx_buf_[0], cnt - to_end);
+        }
+        tail_ = (tail_ + cnt) % kMaxBufSize;
     }
+
     return cnt;
 }
 
@@ -176,18 +190,26 @@ bool UartDma::Init(const struct device* dev, const Config& cfg)
     tx_busy_    = false;
 
     if (!device_is_ready(dev_)) {
+        LOG_ERR("device not ready %s", dev->name);
         return false;
     }
 
     int ret = uart_callback_set(dev_, uart_dma_callback, this);
-    if (ret < 0) return false;
+    if (ret < 0) {
+        LOG_ERR("callback_set fail %d", ret);
+        return false;
+    }
 
     uint16_t bs = cfg.buf_size > kMaxBufSize ? kMaxBufSize : cfg.buf_size;
     dma_buf_size_ = bs;
     ret = uart_rx_enable(dev_, dma_buf_[0], bs, rx_timeout_);
-    if (ret < 0) return false;
+    if (ret < 0) {
+        LOG_ERR("rx_enable fail %d", ret);
+        return false;
+    }
 
     ready_ = true;
+    LOG_INF("uart dma ready %s", dev->name);
     return true;
 }
 
@@ -204,11 +226,20 @@ void UartDma::SetNotify(struct k_sem* sem)
  */
 uint16_t UartDma::Read(uint8_t* buf, uint16_t max_len)
 {
-    uint16_t cnt = 0;
-    while (cnt < max_len && tail_ != head_) {
-        buf[cnt++] = rx_buf_[tail_];
-        tail_ = (tail_ + 1) % sizeof(rx_buf_);
+    uint16_t available = (head_ - tail_ + sizeof(rx_buf_)) % sizeof(rx_buf_);
+    uint16_t cnt = (max_len < available) ? max_len : available;
+
+    if (cnt > 0) {
+        uint16_t to_end = sizeof(rx_buf_) - tail_;
+        if (cnt <= to_end) {
+            memcpy(buf, &rx_buf_[tail_], cnt);
+        } else {
+            memcpy(buf, &rx_buf_[tail_], to_end);
+            memcpy(buf + to_end, &rx_buf_[0], cnt - to_end);
+        }
+        tail_ = (tail_ + cnt) % sizeof(rx_buf_);
     }
+
     return cnt;
 }
 

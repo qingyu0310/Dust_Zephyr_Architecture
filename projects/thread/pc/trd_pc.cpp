@@ -11,42 +11,20 @@
 
 #include "trd_pc.hpp"
 #include "thread.hpp"
-#include <string.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
 #include "usb.hpp"
 #include <zephyr/devicetree.h>
 
 namespace thread::pc {
 
 static Thread<2048> thread_ {};
-
 static Usb usb_ {};
-static const uint8_t tick_data[] = { "tick\r\n" };
 
 static void Task(void*, void*, void*)
 {
-    uint8_t rx_buf[128] {};
-    int64_t next_tick_ms = k_uptime_get() + 1000;
-
     for (;;)
     {
-        if (usb_.IsConfigured() && !usb_.IsTxBusy())
-        {
-            uint16_t len = usb_.Read(rx_buf, sizeof(rx_buf));
-            if (len > 0) {
-                (void)usb_.Send(rx_buf, len);
-                continue;
-            }
-        }
-
-        int64_t now = k_uptime_get();
-        if (now >= next_tick_ms) {
-            next_tick_ms = now + 1000;
-            (void)usb_.Send(tick_data, sizeof(tick_data));
-        }
-
-        k_sleep(K_MSEC(10));
+        k_sleep(K_MSEC(1000));
     }
 }
 
@@ -57,17 +35,17 @@ void thread_init()
     cfg.reg_base = DT_REG_ADDR(DT_NODELABEL(cherryusb_usb0));
     cfg.buf_size = 512;
 
-    printk("cherryusb cdc_acm test begin base=0x%x\n", cfg.reg_base);
-
-    if (usb_.Init(cfg)) {
-        printk("cherryusb cdc_acm test ready\n");
-    } else {
-        printk("cherryusb cdc_acm test init failed\n");
-    }
+    while (!usb_.Init(cfg)) {
+        // printf
+    };
 }
 
 void thread_start(uint8_t prio)
 {
+    if (!usb_.IsReady()) {
+        return;
+    }
+
     thread_.Start(Task, prio);
 }
 

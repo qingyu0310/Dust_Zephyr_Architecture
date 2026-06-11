@@ -10,7 +10,6 @@
  */
 
 #include "trd_can_tx.hpp"
-#include <zephyr/drivers/gpio.h>
 #include "to_can_tx.hpp"
 #include "thread.hpp"
 #include <string.h>
@@ -25,12 +24,6 @@ namespace thread::can {
 // k_msgq 内部拷贝数据，多 put 一 get 天然支持多发布者，且满时丢帧不阻塞。
 static Thread<> thread_{};
 static Can user_can1{};
-
-#ifdef CONFIG_COM_CAN_STBY
-/* 在 projects/boards/ 下对应 board 的 overlay 中定义 stby_gpio 节点来提供引脚 */
-#define STBY_GPIO_NODE DT_NODELABEL(can_stby)
-static const struct gpio_dt_spec stby_ = GPIO_DT_SPEC_GET(STBY_GPIO_NODE, gpios);
-#endif
 
 static void Task(void*, void*, void*)
 {
@@ -54,9 +47,6 @@ static void Task(void*, void*, void*)
 
 void thread_init()
 {
-#ifdef CONFIG_COM_CAN_STBY
-    Can::InitStby(&stby_);
-#endif
     {
         const device* dev = DEVICE_DT_GET(DT_ALIAS(user_can1));
         if (!device_is_ready(dev)) return;

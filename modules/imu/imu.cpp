@@ -8,8 +8,13 @@
 
 #include "imu.hpp"
 #include "imu_to.hpp"
+
+#ifdef CONFIG_MOD_DEV_IMU_BMI088
 #include "bmi088/bmi088.hpp"
+#endif
+#ifdef CONFIG_MOD_DEV_IMU_ICM42688P
 #include "icm42688p/icm42688p.hpp"
+#endif
 
 #include "quaternion_ekf.hpp"
 #include "thread.hpp"
@@ -17,13 +22,15 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/time_units.h>
-#include "zephyr/sys/printk.h"
+#include <zephyr/logging/log.h>
 
 #include "pid.hpp"
 #include "pwm.hpp"
 #include "timer.hpp"
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/pwm.h>
+
+LOG_MODULE_REGISTER(imu, LOG_LEVEL_INF);
 
 namespace {
 
@@ -224,7 +231,7 @@ private:
  * @brief imu
  *
  */
-namespace thread::imu {
+namespace imu {
 
 /**
  * @brief IMU 顶层管理对象
@@ -291,28 +298,30 @@ void ImuManager::Init(bool enable_auto_calibration)
     last_sample_cycle_ = 0;
 
     if (source_ == nullptr && !SelectSource()) {
+        LOG_ERR("SelectSource failed");
         return;
     }
-
     if (source_ == nullptr) {
+        LOG_ERR("source is null");
         return;
     }
-
     if (!source_->Init()) {
+        LOG_ERR("source init failed");
         return;
     }
-
     if (!heater_.Init()) {
+        LOG_ERR("heater init failed");
         return;
     }
 
-    // 先把温度和静态偏置准备好，再放行姿态线程，避免冷机直接进入 EKF。
     if (enable_auto_calibration && !PrepareCalibration()) {
+        LOG_ERR("calibration failed");
         return;
     }
 
     attitude_.Init();
     ready_ = true;
+    LOG_INF("imu ready");
 }
 
 /**
@@ -435,7 +444,11 @@ bool ImuManager::SelectSource()
 #endif
 }
 
-static ImuManager imu_ {};
+} // namespace imu
+
+namespace thread::imu {
+
+static ::imu::ImuManager imu_ {};
 
 void thread_init()
 {
@@ -448,3 +461,4 @@ void thread_start(uint8_t prio)
 }
 
 } // namespace thread::imu
+

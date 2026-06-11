@@ -66,10 +66,3 @@ config COM_USB
     help
         Enable the CherryUSB CDC ACM wrapper in drivers/communication/usb.
 
-config COM_CAN_STBY
-    default n
-    bool "Initialize CAN STBY pin"
-    depends on COM_CAN
-    select GPIO
-    help
-        Initialize the CAN transceiver STBY pin from board DTS overlay.

@@ -13,25 +13,11 @@
 
 #include "zephyr/device.h"
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/sys/printk.h>
 
 class Input final
 {
 public:
-    bool init(const gpio_dt_spec spec, gpio_flags_t extra_flags = GPIO_INPUT) 
-    {
-        spec_ = spec;
-        if (!device_is_ready(spec.port)) {
-            printk("Error: GPIO device %s is not ready\n", spec.port->name);
-            return false;
-        }
-        int ret = gpio_pin_configure_dt(&spec, extra_flags);
-        if (ret != 0) {
-            printk("Error %d: failed to configure pin %d\n", ret, spec.pin);
-            return false;
-        }
-        return true;
-    }
+    bool init(const gpio_dt_spec spec, gpio_flags_t extra_flags = GPIO_INPUT);
 
     bool IsActivated() 
     {

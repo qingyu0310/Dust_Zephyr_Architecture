@@ -13,19 +13,20 @@
 
 #include <string.h>
 #include <zephyr/devicetree.h>
-#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
 
-#ifdef CONFIG_COM_USB
+LOG_MODULE_REGISTER(usb, LOG_LEVEL_INF);
 
-/* CDC ACM 端点号 — 与 HPMicro CherryUSB sample 保持一致 */
-#define CDC_IN_EP  0x81
-#define CDC_OUT_EP 0x01
-#define CDC_INT_EP 0x83
+// CDC ACM 端点号
+static constexpr uint8_t  CDC_IN_EP   = 0x81;   // bulk IN  （设备→主机）
+static constexpr uint8_t  CDC_OUT_EP  = 0x01;   // bulk OUT （主机→设备）
+static constexpr uint8_t  CDC_INT_EP  = 0x83;   // interrupt（通知）
 
-#define USB_CONFIG_SIZE (9 + CDC_ACM_DESCRIPTOR_LEN)
+// 配置描述符总长：USB 标准配置头 + CDC ACM 复合描述符
+static constexpr uint16_t USB_CONFIG_SIZE = 9 + CDC_ACM_DESCRIPTOR_LEN;
 
-static constexpr uint16_t kUsbMaxBufSize = 512;
-static constexpr uint16_t kUsbTxBufSize  = 512;
+static constexpr uint16_t kUsbMaxBufSize = 512;  // 接收 DMA 乒乓缓冲大小
+static constexpr uint16_t kUsbTxBufSize  = 512;  // 发送 DMA 缓冲大小
 
 /* --------------------------------------------------------------------------
  * USB 描述符
@@ -54,12 +55,12 @@ static const uint8_t other_speed_config_descriptor_hs[] {
     CDC_ACM_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
 };
 
-static const uint8_t other_speed_config_descriptor_fs[] = {
+static const uint8_t other_speed_config_descriptor_fs[] {
     USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
     CDC_ACM_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
 };
 
-/* 字符串描述符 */
+// 字符串描述符
 static const char lang_id[] { 0x09, 0x04 };
 
 static const char* string_descriptors[] {
@@ -277,7 +278,7 @@ bool Usb::Init(const struct device* dev, const RxStream::Config& cfg)
 
 /**
  * @brief 通过手动参数初始化
- * @param cfg  完整配置（busid, reg_base, baudrate, 缓冲大小等）
+ * @param cfg  完整配置（busid, reg_base, 缓冲大小等）
  */
 bool Usb::Init(const Config& cfg)
 {
@@ -287,6 +288,7 @@ bool Usb::Init(const Config& cfg)
 
     busid_ = cfg.busid;
     if (busid_ >= CONFIG_USBDEV_MAX_BUS) {
+        LOG_ERR("busid %d out of range", cfg.busid);
         return false;
     }
 
@@ -295,6 +297,7 @@ bool Usb::Init(const Config& cfg)
         reg_base = DefaultRegBase();
     }
     if (reg_base == 0) {
+        LOG_ERR("no reg_base");
         return false;
     }
 
@@ -324,11 +327,14 @@ bool Usb::Init(const Config& cfg)
     usbd_add_endpoint(busid_, &cdc_in_ep);
 
     if (usbd_initialize(busid_, reg_base, usb_cdc_event_handler) != 0) {
+        LOG_ERR("usbd_initialize failed busid=%d base=0x%x", busid_, reg_base);
         usb_instances[busid_] = nullptr;
         return false;
     }
 
     ready_ = true;
+    LOG_INF("usb ready busid=%d base=0x%x", busid_, reg_base);
+
     return true;
 }
 
@@ -353,10 +359,18 @@ uint16_t Usb::Read(uint8_t* buf, uint16_t max_len)
         return 0;
     }
 
-    uint16_t cnt = 0;
-    while (cnt < max_len && tail_ != head_) {
-        buf[cnt++] = rx_buf_[tail_];
-        tail_ = (tail_ + 1) % buf_size_;
+    uint16_t available = (head_ - tail_ + buf_size_) % buf_size_;
+    uint16_t cnt = (max_len < available) ? max_len : available;
+
+    if (cnt > 0) {
+        uint16_t to_end = buf_size_ - tail_;
+        if (cnt <= to_end) {
+            memcpy(buf, &rx_buf_[tail_], cnt);
+        } else {
+            memcpy(buf, &rx_buf_[tail_], to_end);
+            memcpy(buf + to_end, &rx_buf_[0], cnt - to_end);
+        }
+        tail_ = (tail_ + cnt) % buf_size_;
     }
 
     return cnt;
@@ -518,5 +532,3 @@ bool Usb::StartRead(uint8_t busid, uint8_t ep)
 
     return usbd_ep_start_read(busid, ep, &read_buffer[read_buffer_index_][0], mps) == 0;
 }
-
-#endif // CONFIG_COM_USB

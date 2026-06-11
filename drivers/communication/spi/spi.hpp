@@ -1,9 +1,64 @@
 /**
  * @file spi.hpp
  * @author qingyu
- * @brief SPI driver - device-tree-based synchronous read/write and full-duplex transfer
+ * @brief SPI 同步收发驱动 — 设备树初始化 + 半双工/全双工
  * @version 0.1
  * @date 2026-06-01
+ *
+ * # SPI 使用说明
+ *
+ * 基于 Zephyr SPI API，同步阻塞，不依赖中断或 DMA。
+ *
+ * ## 设备树
+ *
+ * ```dts
+ * &spi2 {
+ *     status = "okay";
+ *     imu: imu@0 {
+ *         reg = <0>;
+ *         spi-max-frequency = <100000>;
+ *     };
+ * };
+ * ```
+ *
+ * 项目 overlay 中定义 alias：
+ * ```dts
+ * aliases {
+ *     imu-spi = &icm42688p;
+ * };
+ * ```
+ *
+ * ### Kconfig
+ * ```kconfig
+ * config MOD_DEV_IMU_BMI088
+ *     select COM_SPI
+ * ```
+ *
+ * ### 初始化
+ * ```cpp
+ * Spi spi{};
+ * spi.Init(SPI_DT_SPEC_GET(DT_ALIAS(imu_spi), SPI_WORD_SET(8) | SPI_TRANSFER_MSB, 0));
+ * ```
+ *
+ * ### 全双工收发
+ * ```cpp
+ * uint8_t tx[] = { 0x01, 0x02 };
+ * uint8_t rx[2];
+ * spi.Transceive(tx, rx, 2);  // 发 tx 同时收 rx
+ * ```
+ *
+ * ### 半双工
+ * ```cpp
+ * spi.Send(tx_data, len);     // 只写
+ * spi.Read(rx_data, len);     // 只读
+ * ```
+ *
+ * ### 总线释放
+ * ```cpp
+ * spi.Release();  // 控制权交回 DMA 等其他控制器
+ * ```
+ *
+ * @copyright Copyright (c) 2026
  */
 
 #pragma once

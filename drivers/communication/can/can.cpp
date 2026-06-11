@@ -7,20 +7,9 @@
  */
 
 #include "can.hpp"
+#include <zephyr/logging/log.h>
 
-#ifdef CONFIG_COM_CAN_STBY
-
-/**
- * @brief 初始化 standby 引脚（进入待机模式）
- */
-void Can::InitStby(const struct gpio_dt_spec *stby)
-{
-    if (device_is_ready(stby->port)) {
-        gpio_pin_configure_dt(stby, GPIO_OUTPUT_LOW);
-    }
-}
-
-#endif
+LOG_MODULE_REGISTER(can, LOG_LEVEL_INF);
 
 /**
  * @brief 初始化 CAN 设备并注册接收过滤器
@@ -31,12 +20,15 @@ void Can::InitStby(const struct gpio_dt_spec *stby)
 bool Can::Init(const struct device *dev, const struct can_filter &filter, can_mode_t ctrl_mode)
 {
     dev_ = dev;
+    
     if (!device_is_ready(dev_)) {
+        LOG_ERR("device not ready %s", dev->name);
         return false;
     }
 
     filter_id_ = can_add_rx_filter(dev_, rx_callback, this, &filter);
     if (filter_id_ < 0) {
+        LOG_ERR("add_rx_filter fail id=0x%x", filter.id);
         return false;
     }
 
@@ -45,9 +37,11 @@ bool Can::Init(const struct device *dev, const struct can_filter &filter, can_mo
     }
 
     if (can_start(dev_) != 0) {
+        LOG_ERR("can_start fail %s", dev->name);
         return false;
     }
 
+    LOG_INF("can ready %s filter=%d", dev->name, filter_id_);
     return true;
 }
 

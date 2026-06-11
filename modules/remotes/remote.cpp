@@ -18,10 +18,13 @@
 #include "vt13.hpp"
 
 #include <string.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(remote, LOG_LEVEL_INF);
 
 using namespace topic::remote_to;
 
-namespace thread::remote {
+namespace remote {
 
 /**
  * @brief 带状态机的遥控器解码与自动识别 worker。
@@ -141,48 +144,6 @@ static constexpr Remote::Protocol kProtocolTable[] {
     { RemoteType::VT12, "VT12", vt12::kFrameSizeVT12, vt12::validate, vt12::decode, 2 },
     { RemoteType::DR16, "DR16", dr16::kFrameSizeDR16, dr16::validate, dr16::decode, 3 },
 };
-
-static Remote remote_ {};
-static bool remote_ready_ = false;
-
-/**
- * @brief 初始化 UART DMA，并将遥控器解码器配置为自动识别模式。
- */
-void thread_init()
-{
-    static UartDma rx {};
-    RxStream::Config cfg {};
-
-    // HPM UART4 uses the low-level RX idle fallback to flush DMA early.
-    // Keep the DMA buffer large enough to avoid full-buffer interrupt pressure.
-    constexpr uint16_t kBufferSize = 128;
-    constexpr uint16_t kTimeour    = 1000;
-
-    cfg.buf_size   = kBufferSize;
-    cfg.rx_timeout = kTimeour;
-
-    if (!rx.Init(DEVICE_DT_GET(DT_ALIAS(remote_uart)), cfg)) {
-        remote_ready_ = false;
-        return;
-    }
-
-    remote_.Init(RemoteType::Auto, rx);
-    remote_ready_ = true;
-}
-
-/**
- * @brief 如果初始化成功，则启动遥控器线程。
- *
- * @param prio Zephyr 线程优先级。
- */
-void thread_start(uint8_t prio)
-{
-    if (!remote_ready_) {
-        return;
-    }
-
-    remote_.Start(prio);
-}
 
 /**
  * @brief 按协议类型查找协议描述项。
@@ -494,4 +455,51 @@ void Remote::Task()
     }
 }
 
+} // namespace remote
+
+namespace thread::remote {
+
+static ::remote::Remote remote_ {};
+static bool remote_ready_ = false;
+
+/**
+ * @brief 初始化 UART DMA，并将遥控器解码器配置为自动识别模式。
+ */
+void thread_init()
+{
+    static UartDma rx {};
+    RxStream::Config cfg {};
+
+    constexpr uint16_t kBufferSize = 128;
+    constexpr uint16_t kTimeour    = 1000;
+
+    cfg.buf_size   = kBufferSize;
+    cfg.rx_timeout = kTimeour;
+
+    if (!rx.Init(DEVICE_DT_GET(DT_ALIAS(remote_uart)), cfg)) {
+        LOG_ERR("uart init failed");
+        remote_ready_ = false;
+        return;
+    }
+
+    remote_.Init(RemoteType::Auto, rx);
+    remote_ready_ = true;
+    LOG_INF("remote ready");
+}
+
+/**
+ * @brief 如果初始化成功，则启动遥控器线程。
+ *
+ * @param prio Zephyr 线程优先级。
+ */
+void thread_start(uint8_t prio)
+{
+    if (!remote_ready_) {
+        return;
+    }
+
+    remote_.Start(prio);
+}
+
 } // namespace thread::remote
+

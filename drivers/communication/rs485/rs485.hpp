@@ -1,9 +1,68 @@
 /**
  * @file rs485.hpp
  * @author qingyu
- * @brief RS485 half-duplex driver based on UART async API.
+ * @brief RS485 半双工驱动 — 基于 UART DMA + 方向 GPIO
  * @version 0.1
  * @date 2026-05-23
+ *
+ * # RS485 使用说明
+ *
+ * 基于 UART DMA + GPIO 方向控制引脚实现半双工收发。
+ * 发送前拉高方向引脚，完成后自动切回接收。
+ *
+ * ## 设备树
+ *
+ * 项目 overlay 中定义：
+ * ```dts
+ * aliases {
+ *     user-rs485 = &uart3;
+ * };
+ * rs485_dir: rs485_dir {
+ *     gpios = <&gpioa 10 GPIO_ACTIVE_HIGH>;
+ * };
+ * ```
+ *
+ * ### Kconfig
+ * ```kconfig
+ * config TRD_RS485
+ *     select COM_RS485
+ * ```
+ *
+ * ### 初始化
+ * ```cpp
+ * static Rs485 rs485{};
+ * static const gpio_dt_spec dir = GPIO_DT_SPEC_GET(DT_NODELABEL(rs485_dir), gpios);
+ *
+ * void init() {
+ *     Rs485::Config cfg{};
+ *     cfg.buf_size   = 128;
+ *     cfg.rx_timeout = 1000;
+ *     cfg.dir        = &dir;
+ *     cfg.tx_level   = 1;
+ *     cfg.rx_level   = 0;
+ *     rs485.Init(DEVICE_DT_GET(DT_ALIAS(user_rs485)), cfg);
+ *     rs485.SetNotify(&rx_sem);
+ * }
+ * ```
+ *
+ * ### 接收
+ * ```cpp
+ * k_sem_take(&rx_sem, K_FOREVER);
+ * uint8_t buf[64];
+ * uint16_t len = rs485.Read(buf, sizeof(buf));
+ * ```
+ *
+ * ### 发送
+ * ```cpp
+ * rs485.Send(data, len);  // 自动切方向引脚 → 发送 → 切回接收
+ * ```
+ *
+ * ### 停止
+ * ```cpp
+ * rs485.Stop();  // 停止 DMA 接收，方向引脚回到接收态
+ * ```
+ *
+ * @copyright Copyright (c) 2026
  */
 
 #pragma once

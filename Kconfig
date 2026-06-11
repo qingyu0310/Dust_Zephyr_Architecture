@@ -3,8 +3,27 @@
 # 子系统（CMSIS/zbus 等）的兼容性配置在此文件末尾
 # 所有功能模块 Kconfig 由 projects/thread/Kconfig 统一 rsource
 
+config DEBUG_LOG
+    bool "Enable Zephyr LOG output"
+    default n
+    select LOG
+    select LOG_BACKEND_UART
+    help
+        Enable Zephyr logging system with UART backend.
+
+if DEBUG_LOG
+
+config LOG_DEFAULT_LEVEL
+    int "Default log level (0=off, 1=err, 2=wrn, 3=inf, 4=dbg)"
+    default 3
+    range 0 4
+
+endif
+
 config PRJ_TEST
     bool "Test project"
+    default n
+    select DEBUG_LOG
     help
         测试项目
 if PRJ_TEST

@@ -137,15 +137,24 @@ public:
         uint32_t reg_base = 0;       // USB 控制器寄存器基址，0=自动检测
     };
 
-    bool    Init(const struct device* dev, const RxStream::Config& cfg) override;
-    bool    Init(const Config& cfg);
-    void    SetNotify(struct k_sem* sem) override;
+    bool     Init(const struct device* dev, const RxStream::Config& cfg) override;
+    bool     Init(const Config& cfg);
+    void     SetNotify(struct k_sem* sem) override;
     uint16_t Read(uint8_t* buf, uint16_t max_len) override;
     bool     Send(const uint8_t* data, uint32_t len);
     uint8_t  GetSpeed() const;
 
+    /**
+     * @brief 驱动初始化完成
+     */
     bool IsReady()      const { return ready_; }
+    /**
+     * @brief USB 已枚举，CDC ACM 配置设置完成
+     */
     bool IsConfigured() const { return configured_; }
+    /**
+     * @brief 上一帧发送未完成，不可发新数据
+     */
     bool IsTxBusy()     const { return tx_busy_; }
 
 private:

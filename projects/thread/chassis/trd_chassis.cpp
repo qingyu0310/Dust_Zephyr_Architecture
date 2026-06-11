@@ -268,6 +268,7 @@ static void FramePublish()
         msg.data[idx * 2 + 0] = static_cast<uint8_t>(raw >> 8);
         msg.data[idx * 2 + 1] = static_cast<uint8_t>(raw & 0xFF);
     };
+    
     for (uint8_t wi = 0; wi < N_Wheel; wi++)
     {
         set_out(kSteerDataIdx[wi], SteerPwrCtrl.GetLimitedCurrent(wi));

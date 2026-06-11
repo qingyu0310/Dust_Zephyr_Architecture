@@ -4,6 +4,67 @@
  * @brief UART 驱动 — 中断 / DMA + 通用 RxStream 接口
  * @version 0.4
  * @date 2026-05-16
+ *
+ * # UART 使用说明
+ *
+ * ## 中断模式 Uart
+ *
+ * FIFO 中断逐字节接收，适合低数据率场景。
+ *
+ * ### 设备树
+ *
+ * 项目 overlay 中定义 alias：
+ * ```dts
+ * aliases {
+ *     uart-remote = &uart4;
+ * };
+ * ```
+ *
+ * ### Kconfig
+ * ```kconfig
+ * config TRD_REMOTE
+ *     select COM_UART
+ * ```
+ *
+ * ### 初始化
+ * ```cpp
+ * static Uart uart;
+ * static k_sem rx_sem;
+ *
+ * void init() {
+ *     k_sem_init(&rx_sem, 0, 1);
+ *     RxStream::Config cfg{};
+ *     cfg.buf_size = 256;
+ *     uart.Init(DEVICE_DT_GET(DT_ALIAS(uart_remote)), cfg);
+ *     uart.SetNotify(&rx_sem);
+ * }
+ * ```
+ *
+ * ### 接收
+ * ```cpp
+ * k_sem_take(&rx_sem, K_FOREVER);
+ * uint8_t buf[64];
+ * uint16_t len = uart.Read(buf, sizeof(buf));
+ * ```
+ *
+ * ### 发送
+ * ```cpp
+ * uart.Send(data, len);  // 轮询阻塞发送
+ * ```
+ *
+ * ## DMA 模式 UartDma
+ *
+ * 双缓冲 DMA 接收，适合高速连续接收。通过 Kconfig 区分：
+ * ```kconfig
+ * config TRD_REMOTE
+ *     select COM_UART_DMA    # 使用 DMA 版
+ *     # select COM_UART      # 使用中断版
+ * ```
+ *
+ * 初始化与中断模式接口相同，额外提供 `Stop()` 停止接收。
+ * 可通过 `rx_cb_` 注册回调直接消费数据，绕过环形缓冲。
+ *
+ * @copyright Copyright (c) 2026
  */
 
 #pragma once
