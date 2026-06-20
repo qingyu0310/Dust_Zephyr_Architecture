@@ -3,6 +3,7 @@ CompileFlags:
   Add:
     - -ferror-limit=0
     - -Wno-unused-variable
+    - "-Wno-#pragma-messages"
     - -isystem
     - D:/Zephyr/zephyr-sdk-0.16.8/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/12.2.0/include
     - -isystem
@@ -70,3 +71,4 @@ Diagnostics:
     - unknown_warning_option
     - unused_variable
     - no_member
+    - "#pragma_messages"
