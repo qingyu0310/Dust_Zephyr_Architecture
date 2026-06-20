@@ -75,7 +75,7 @@
 
 ### 各层的自洽性
 
-每一层都是独立的、可重用的，不依赖上层：
+每一层都是独立的 git 仓库，可单独版本管理。层间不反向依赖：
 
 ```
 Zephyr HAL        ← 厂商提供，框架不关心
@@ -259,21 +259,33 @@ project/thread/Kconfig          → 功能模块开关
 
 ---
 
+## 子模块
+
+| 子模块 | 仓库 | 说明 |
+|--------|------|------|
+| `algorithm/` | [Dust_Zephyr_Architecture_Algorithm](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Algorithm) | 控制/滤波/辨识算法 |
+| `drivers/` | [Dust_Zephyr_Architecture_Drivers](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Drivers) | 硬件外设驱动 |
+| `modules/` | [Dust_Zephyr_Architecture_Modules](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Modules) | 设备模块封装 |
+| `topic/` | [Dust_Zephyr_Architecture_Topic](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Topic) | 线程间数据通道 |
+| `cmd/` | [Dust_Zephyr_Architecture_Cmd](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Cmd) | Shell 命令 |
+| `project/` | [Dust_Zephyr_Architecture_Project](https://github.com/qingyu0310/Dust_Zephyr_Architecture_Project) | 应用层（app/board/thread） |
+
 ## 目录总览
 
 ```text
-├── algorithm/          算法层
-├── cmd/                命令层
-├── drivers/            驱动层
-├── modules/            模块层
-├── topic/              话题层
-├── project/           应用层（可移植项目单元）
-│   ├── apps/           系统入口 + 启动编排
-│   ├── boards/         板级配置（DTS + Kconfig + 烧录脚本）
-│   └── thread/         RTOS 线程
-├── Kconfig             根 Kconfig（项目门禁）
-├── CMakeLists.txt      根 CMake（项目选择 + 构建入口）
-└── prj.conf            项目公共默认配置
+├── algorithm/       → submodule
+├── cmd/             → submodule
+├── drivers/         → submodule
+├── modules/         → submodule
+├── topic/           → submodule
+├── project/         → submodule
+├── src/               应用入口
+├── include/           公共头文件
+├── doc/               文档
+├── scripts/           工具脚本
+├── Kconfig            根 Kconfig
+├── CMakeLists.txt     构建入口
+└── prj.conf           默认配置
 ```
 
 ---
