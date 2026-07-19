@@ -14,11 +14,9 @@
 
 int main(void)
 {
-	System_Bsp_Init();
-	System_Modules_Init();
-	System_Thread_Start();
+	System_Startup();
 
-	while (1) 
+	while (1)
 	{
 		k_msleep(1000);
 	}
