@@ -1,7 +1,9 @@
-"""Fit the IMU heater plant from normal closed-loop PID logs.
+"""Fit the IMU heater plant from the current closed-loop IMU logs.
 
-Required sample format:
-    cl_ident,t_us=123456,temp_c=31.568,duty=0.950
+Current firmware log contract:
+    start marker : imu ready
+    formal start : first ident sample after "Cooldown Done"
+    sample line  : seq=...,t_us=...,dt_us=...,stage=...,state=...,temp_c=...,duty=...
 
 The fitter uses the measured duty as the plant input and estimates:
     G(s) = K * exp(-L*s) / (tau*s + 1)
@@ -18,22 +20,26 @@ from pathlib import Path
 
 import numpy as np
 
-
 SERIAL_PORT = "COM21"
 SERIAL_BAUD = 921600
 MAX_SAMPLES = 6000
 CAPTURE_SECONDS = 120.0
 MAX_CAPTURE_SAMPLES = 30000
 START_TIMEOUT_SECONDS = 120.0
-IDENT_START_TEMP_C = 35.0
 
 SAMPLE_RE = re.compile(
-    r"t_us=(?P<t_us>\d+).*?"
-    r"temp_c=(?P<temp>[-+0-9.eE]+).*?"
+    r"seq=(?P<seq>\d+),"
+    r"t_us=(?P<t_us>\d+),"
+    r"dt_us=(?P<dt_us>\d+),"
+    r"stage=(?P<stage>\d+),"
+    r"state=(?P<state>\d+),"
+    r"temp_c=(?P<temp>[-+0-9.eE]+),"
     r"duty=(?P<duty>[-+0-9.eE]+)"
 )
-CLOSED_START_RE = re.compile(r"\bclosed_ident_start\b")
-CLOSED_FINISH_RE = re.compile(r"\bclosed_ident_(?:finish|finished|stop)\b")
+IMU_READY_RE = re.compile(r"\bimu ready\b")
+COOLDOWN_DONE_RE = re.compile(r"\bCooldown Done\b")
+CLOSED_IDENT_CMD = b"ClosedIdent"
+STOP_CMD = b"Stop"
 
 
 @dataclass
@@ -41,6 +47,17 @@ class ClosedLoopLog:
     time_s: np.ndarray
     temp_c: np.ndarray
     duty: np.ndarray
+
+
+def parse_sample_line(line: str) -> tuple[float, float, float] | None:
+    match = SAMPLE_RE.search(line)
+    if not match:
+        return None
+    return (
+        int(match.group("t_us")) * 1e-6,
+        float(match.group("temp")),
+        float(match.group("duty")),
+    )
 
 
 def parse_log_lines(lines: list[str]) -> ClosedLoopLog:
@@ -51,9 +68,12 @@ def parse_log_lines(lines: list[str]) -> ClosedLoopLog:
     previous_t_us = -1
     started = False
     formal_started = False
+    cooldown_done = False
 
     for line in lines:
-        if CLOSED_START_RE.search(line):
+        if IMU_READY_RE.search(line):
+            if started:
+                continue
             time_s.clear()
             temp_c.clear()
             duty.clear()
@@ -61,22 +81,27 @@ def parse_log_lines(lines: list[str]) -> ClosedLoopLog:
             previous_t_us = -1
             started = True
             formal_started = False
+            cooldown_done = False
             continue
 
         if not started:
             continue
 
-        match = SAMPLE_RE.search(line)
-        if match is None:
+        if not formal_started and COOLDOWN_DONE_RE.search(line):
+            cooldown_done = True
             continue
 
-        current_temp_c = float(match.group("temp"))
+        sample = parse_sample_line(line)
+        if sample is None:
+            continue
+        current_t_s, current_temp_c, current_duty = sample
         if not formal_started:
-            if current_temp_c < IDENT_START_TEMP_C:
+            if not cooldown_done:
                 continue
+            # 以 Cooldown Done 之后的第一帧作为正式辨识起点。
             formal_started = True
 
-        current_t_us = int(match.group("t_us"))
+        current_t_us = int(round(current_t_s * 1.0e6))
         if current_t_us <= previous_t_us:
             continue
         if first_t_us is None:
@@ -84,19 +109,18 @@ def parse_log_lines(lines: list[str]) -> ClosedLoopLog:
 
         previous_t_us = current_t_us
         time_s.append((current_t_us - first_t_us) * 1.0e-6)
-        temp_c.append(float(match.group("temp")))
-        duty.append(float(match.group("duty")))
+        temp_c.append(current_temp_c)
+        duty.append(current_duty)
 
     if not started:
         raise ValueError(
-            "closed_ident_start was not found; this log is not a complete "
-            "closed-loop identification run"
+            "imu ready was not found; "
+            "this log is not a complete closed-loop identification run"
         )
     if len(time_s) < 3:
         raise ValueError(
-            f"fewer than three formal samples found after "
-            f"{IDENT_START_TEMP_C:.1f} C; expected "
-            "cl_ident,t_us=...,temp_c=...,duty=..."
+            "fewer than three formal samples found after Cooldown Done; "
+            "expected current seq,t_us,dt_us,stage,state,temp_c,duty logs"
         )
 
     return ClosedLoopLog(
@@ -154,15 +178,15 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
     start_wall = 0.0
     last_temp = 0.0
     last_duty = 0.0
+    cooldown_done = False
     print(f"[CLID][READY] serial={port},baud={baud}", flush=True)
     print(
-        "[CLID][WAITING] waiting for closed_ident_start; "
+        "[CLID][WAITING] waiting for imu ready; "
         "samples before it are ignored",
         flush=True,
     )
     print(
-        "[CLID][STOP] stops on closed_ident_finish/closed_ident_stop "
-        "or Ctrl+C",
+        "[CLID][STOP] stops on Ctrl+C",
         flush=True,
     )
 
@@ -179,7 +203,16 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
                                 f"[CLID][HEARTBEAT][WAITING_START] "
                                 f"elapsed={now - (start_wall or now):.0f}s,"
                                 f"lines={total_lines},samples_seen={sample_lines}; "
-                                "waiting for closed_ident_start",
+                                "waiting for imu ready",
+                                flush=True,
+                            )
+                        elif not cooldown_done:
+                            print(
+                                f"[CLID][HEARTBEAT][COOLDOWN] "
+                                f"elapsed={elapsed:.0f}s,lines={total_lines},"
+                                f"samples_seen={sample_lines},"
+                                f"temp={last_temp:.2f}C; "
+                                "waiting for Cooldown Done",
                                 flush=True,
                             )
                         else:
@@ -194,7 +227,11 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
                 line = raw.decode(errors="replace").rstrip("\r\n")
                 total_lines += 1
 
-                if CLOSED_START_RE.search(line):
+                if IMU_READY_RE.search(line):
+                    if run_started:
+                        continue
+                    device.write(CLOSED_IDENT_CMD)
+                    device.flush()
                     lines = [line]
                     samples = 0
                     ignored_samples = 0
@@ -202,14 +239,24 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
                     start_wall = __import__("time").monotonic()
                     last_status = start_wall
                     print(
-                        "[CLID][START] closed_ident_start received; "
-                        "previous run cleared, new closed-loop capture started",
+                        "[CLID][START] imu ready received; "
+                        "closed-loop capture started",
                         flush=True,
                     )
                     continue
 
-                sample_match = SAMPLE_RE.search(line)
-                if sample_match is None:
+                if not cooldown_done and COOLDOWN_DONE_RE.search(line):
+                    cooldown_done = True
+                    lines.append(line)
+                    print(
+                        "[CLID][COOLDOWN_DONE] cooldown complete; "
+                        "the next sample becomes the formal start",
+                        flush=True,
+                    )
+                    continue
+
+                sample = parse_sample_line(line)
+                if sample is None:
                     continue
                 sample_lines += 1
 
@@ -218,21 +265,25 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
                     if ignored_samples == 1:
                         print(
                             "[CLID][IGNORED] sample received before "
-                            "closed_ident_start; waiting for a new run",
+                            "start marker; waiting for a new run",
                             flush=True,
                         )
                     continue
 
+                if not cooldown_done:
+                    last_temp = sample[1]
+                    last_duty = sample[2]
+                    continue
+
                 lines.append(line)
                 samples += 1
-                last_temp = float(sample_match.group("temp"))
-                last_duty = float(sample_match.group("duty"))
+                sample_t, last_temp, last_duty = sample
                 if samples == 1:
                     print("[CLID][RECEIVED] first closed-loop sample", flush=True)
                 elif samples % 100 == 0:
                     print(
                         f"[CLID][RUNNING] samples={samples},"
-                        f"elapsed={float(sample_match.group('t_us')) * 1.0e-6:.3f}s,"
+                        f"elapsed={sample_t:.3f}s,"
                         f"temp={last_temp:.2f}C,duty={last_duty:.3f}",
                         flush=True,
                     )
@@ -247,14 +298,12 @@ def _capture_serial_legacy(port: str, baud: int) -> ClosedLoopLog:
                     )
                     last_status = now
 
-                if CLOSED_FINISH_RE.search(line):
-                    break
     except KeyboardInterrupt:
         print("\n[CLID][STOP] serial capture stopped", flush=True)
 
     if not run_started:
         raise ValueError(
-            "closed_ident_start was not received; reset the IMU and start "
+            "imu ready was not received; reset the IMU and start "
             "a new closed-loop identification run"
         )
     return parse_log_lines(lines)
@@ -281,19 +330,19 @@ def capture_serial(
     last_sample_duty = 0.0
     sample_seen_since_status = False
     formal_started = False
+    cooldown_done = False
     status_start = time.monotonic()
-    last_status = status_start - 5.0
+    last_status = status_start - 1.0
     capture_start_t_us: int | None = None
 
     print(f"[CLID][READY] serial={port},baud={baud}", flush=True)
     print(
-        "[CLID][WAITING] waiting for closed_ident_start; "
+        "[CLID][WAITING] waiting for imu ready; "
         "samples before start are ignored",
         flush=True,
     )
     print(
-        "[CLID][STOP] stops on closed_ident_finish/closed_ident_stop "
-        "or Ctrl+C",
+        "[CLID][STOP] stops on capture limit or Ctrl+C",
         flush=True,
     )
 
@@ -311,21 +360,21 @@ def capture_serial(
                                 f"[CLID][HEARTBEAT][WAITING_START] "
                                 f"elapsed={elapsed:.0f}s,lines={total_lines},"
                                 f"samples_seen={sample_lines}; "
-                                "waiting for closed_ident_start",
+                                "waiting for imu ready",
                                 flush=True,
                             )
                             if elapsed >= start_timeout_seconds:
                                 raise TimeoutError(
-                                    "closed_ident_start was not received within "
+                                    "imu ready was not received within "
                                     f"{start_timeout_seconds:.0f}s"
                                 )
                         elif not formal_started:
                             print(
-                                f"[CLID][HEARTBEAT][WARMUP] "
+                                f"[CLID][HEARTBEAT][COOLDOWN] "
                                 f"elapsed={elapsed:.0f}s,lines={total_lines},"
                                 f"samples_seen={sample_lines},"
                                 f"temp={last_sample_temp:.2f}C; "
-                                f"waiting for temp>={IDENT_START_TEMP_C:.1f}C",
+                                "waiting for Cooldown Done",
                                 flush=True,
                             )
                         elif not sample_seen_since_status:
@@ -344,7 +393,11 @@ def capture_serial(
                 line = raw.decode(errors="replace").rstrip("\r\n")
                 total_lines += 1
 
-                if CLOSED_START_RE.search(line):
+                if IMU_READY_RE.search(line):
+                    if run_started:
+                        continue
+                    device.write(CLOSED_IDENT_CMD)
+                    device.flush()
                     lines = [line]
                     run_started = True
                     active_samples = 0
@@ -354,75 +407,72 @@ def capture_serial(
                     status_start = now
                     last_status = now
                     print(
-                        "[CLID][START] closed_ident_start received; "
-                        "previous run cleared",
+                        "[CLID][START] imu ready received; "
+                        "closed-loop capture started",
                         flush=True,
                     )
                     continue
 
-                sample_match = SAMPLE_RE.search(line)
-                if sample_match is not None:
+                sample = parse_sample_line(line)
+                if sample is not None:
                     sample_lines += 1
                     if not run_started:
                         if sample_lines == 1:
                             print(
                                 "[CLID][RECEIVED_BUT_IGNORED] sample received "
-                                "before closed_ident_start",
+                                "before start marker",
                                 flush=True,
                             )
                         continue
 
-                    last_sample_temp = float(sample_match.group("temp"))
-                    last_sample_duty = float(sample_match.group("duty"))
+                    current_t_s, last_sample_temp, last_sample_duty = sample
                     if not formal_started:
-                        if last_sample_temp < IDENT_START_TEMP_C:
-                            if sample_lines == 1 or sample_lines % 100 == 0:
-                                print(
-                                    f"[CLID][WARMUP] samples_seen={sample_lines},"
-                                    f"temp={last_sample_temp:.2f}C,"
-                                    f"duty={last_sample_duty:.3f}; "
-                                    f"waiting for temp>={IDENT_START_TEMP_C:.1f}C",
-                                    flush=True,
-                                )
+                        if not cooldown_done:
                             continue
 
                         formal_started = True
                         active_samples = 0
                         capture_start_t_us = None
                         print(
-                            f"[CLID][IDENT_START] temperature reached "
-                            f"{IDENT_START_TEMP_C:.1f}C; formal capture started",
+                            f"[CLID][IDENT_START] cooldown done, "
+                            f"first sample temp={last_sample_temp:.2f}C,"
+                            f"duty={last_sample_duty:.3f}; "
+                            "this frame is the formal start",
                             flush=True,
                         )
 
                     lines.append(line)
                     active_samples += 1
                     sample_seen_since_status = True
-                    current_t_us = int(sample_match.group("t_us"))
+                    current_t_us = int(round(current_t_s * 1.0e6))
                     if capture_start_t_us is None:
                         capture_start_t_us = current_t_us
 
+                    capture_elapsed = (
+                        current_t_us - capture_start_t_us
+                    ) * 1.0e-6
+
                     if active_samples == 1:
                         print(
-                            "[CLID][RECEIVED] first closed-loop sample",
+                            f"[CLID][CAPTURE] samples=1,elapsed=0.000s,"
+                            f"temp={last_sample_temp:.2f}C,"
+                            f"duty={last_sample_duty:.3f}",
                             flush=True,
                         )
                     elif active_samples % 100 == 0:
                         print(
                             f"[CLID][RUNNING] samples={active_samples},"
-                            f"elapsed={float(sample_match.group('t_us')) * 1.0e-6:.3f}s,"
+                            f"elapsed={capture_elapsed:.3f}s,"
                             f"temp={last_sample_temp:.2f}C,"
                             f"duty={last_sample_duty:.3f}",
                             flush=True,
                         )
-
-                    capture_elapsed = (
-                        current_t_us - capture_start_t_us
-                    ) * 1.0e-6
                     if (
                         capture_elapsed >= capture_seconds
                         or active_samples >= max_capture_samples
                     ):
+                        device.write(STOP_CMD)
+                        device.flush()
                         print(
                             f"[CLID][STOP] capture limit reached: "
                             f"samples={active_samples},"
@@ -431,23 +481,27 @@ def capture_serial(
                         )
                         break
                 elif run_started:
+                    if not formal_started and COOLDOWN_DONE_RE.search(line):
+                        cooldown_done = True
+                        print(
+                            "[CLID][COOLDOWN_DONE] cooldown complete; "
+                            "the next sample becomes the formal start",
+                            flush=True,
+                        )
                     lines.append(line)
-
-                if run_started and CLOSED_FINISH_RE.search(line):
-                    print("[CLID][EVENT] closed-loop capture finished", flush=True)
-                    break
     except KeyboardInterrupt:
+        device.write(STOP_CMD)
+        device.flush()
         print("\n[CLID][STOP] serial capture stopped", flush=True)
 
     if not run_started:
         raise ValueError(
-            "closed_ident_start was not received; reset the IMU and start "
+            "imu ready was not received; reset the IMU and start "
             "a new closed-loop identification run"
         )
     if not formal_started:
         raise ValueError(
-            f"temperature never reached {IDENT_START_TEMP_C:.1f} C after "
-            "closed_ident_start"
+            "Cooldown Done was never followed by enough formal samples"
         )
     return parse_log_lines(lines)
 
@@ -562,7 +616,7 @@ def main() -> int:
         "--start-timeout",
         type=float,
         default=START_TIMEOUT_SECONDS,
-        help="maximum wait for closed_ident_start",
+        help="maximum wait for imu ready",
     )
     parser.add_argument("--no-plot", action="store_true", help="disable result plot")
     args = parser.parse_args()

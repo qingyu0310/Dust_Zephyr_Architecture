@@ -31,7 +31,7 @@ import re
 import sys
 import time
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -107,13 +107,36 @@ IDENT_STATE_NAMES = {
     3: "Finished",
 }
 OPEN_HEATING_STATE = 1
-START_IDENT_COMMAND = b"StartIdent"
+OPEN_IDENT_COMMAND = b"OpenIdent"
 STOP_IDENT_COMMAND = b"Stop"
-EXPECTED_STAGE_COUNT = 6
+EXPECTED_STAGE_COUNT = 7
 EXPECTED_RUN_COUNT = 6
 WARMUP_RUN_COUNT = 1
-OPEN_MODE_START_RE = re.compile(r"\bopen_ident_start\b")
+VALIDATION_RUN_COUNT = 1
+OPEN_MODE_START_RE = re.compile(r"\bset autoident mode\b")
 IMU_READY_RE = re.compile(r"\bimu ready\b")
+
+# Keep this mirror of ident::Identifier::kDutySeq in heater.hpp source-aligned.
+EXPECTED_DUTY_SEQUENCE = np.asarray(
+    [0.20, 0.25, 0.30, 0.35, 0.30, 0.25, 0.20],
+    dtype=float,
+)
+
+# These are pre-fit data-quality gates, not model-fit thresholds.
+PREFIT_TEMP_MIN_C = 30.0
+PREFIT_TEMP_MAX_C = 50.0
+PREFIT_MIN_STAGE_SAMPLES = 50
+PREFIT_MIN_TOTAL_SAMPLES = 500
+PREFIT_MIN_WINDOW_SAMPLES = 500
+PREFIT_MIN_WINDOW_DURATION_S = 20.0
+PREFIT_MIN_WINDOW_TEMP_SPAN_C = 3.0
+PREFIT_MIN_WINDOW_DUTY_SPAN = 0.10
+PREFIT_MIN_DURATION_S = 20.0
+PREFIT_MAX_DT_GAP_S = 0.25
+PREFIT_MIN_TEMP_SPAN_C = 3.0
+PREFIT_MIN_NET_RISE_C = 2.0
+PREFIT_PROFILE_POINTS_PER_STAGE = 25
+PREFIT_PROFILE_OUTLIER_FLOOR_C = 1.0
 
 
 @dataclass
@@ -139,6 +162,9 @@ class FullRun:
     series: Series
     stage: np.ndarray
     fit: dict
+    prefit: dict = field(default_factory=dict)
+    selected_for_fit: bool = False
+    fit_mask: np.ndarray | None = None
     mean_prediction: np.ndarray | None = None
     mean_error: np.ndarray | None = None
 
@@ -460,7 +486,6 @@ class OnlineIdentifier:
         self._last_seq: int | None = None
         self._started = False
         self._armed = False
-        self._run_t0_us: int | None = None
 
     def reset_run(self) -> None:
         self._current_segment = None
@@ -472,7 +497,6 @@ class OnlineIdentifier:
         self._last_seq = None
         self._wall_start = time.monotonic()
         self._started = True
-        self._run_t0_us = None
 
     def arm_command_start(self) -> None:
         self._armed = True
@@ -519,15 +543,11 @@ class OnlineIdentifier:
         if self._current_segment is None:
             return
 
-        temp_v, duty_v, dt_v, timestamp_s = sample
-        timestamp_us = int(round(timestamp_s * 1.0e6))
-        if self._run_t0_us is None:
-            self._run_t0_us = timestamp_us
-
+        temp_v, duty_v, dt_v, _ = sample
         series = self._current_segment.series
         series.time = np.append(
             series.time,
-            max(0.0, timestamp_us - self._run_t0_us) * 1.0e-6,
+            self._raw_time_s,
         )
         series.temp = np.append(series.temp, temp_v)
         series.duty = np.append(series.duty, duty_v)
@@ -577,7 +597,7 @@ class OnlineIdentifier:
                 self._armed = False
                 ident_print(
                     f"\n[{datetime.now():%H:%M:%S}] "
-                    "[IDENT][START] StartIdent acknowledged by first sample; "
+                    "[IDENT][START] OpenIdent acknowledged by first sample; "
                     "new identification started",
                     flush=True,
                 )
@@ -701,10 +721,10 @@ def read_serial_online(
 
     online = OnlineIdentifier()
     ident_print(
-        "[IDENT][COMMAND] sends StartIdent to MCU without a line ending"
+        "[IDENT][COMMAND] sends OpenIdent to MCU without a line ending"
     )
     ident_print(
-        "[IDENT][WAITING] first sample after StartIdent starts this run"
+        "[IDENT][WAITING] first sample after OpenIdent starts this run"
     )
     ident_print(
         "[IDENT][STOP] sends Stop after Finished/Safety Stop or Ctrl+C"
@@ -727,10 +747,10 @@ def read_serial_online(
     )
     ident_print(
         f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}] "
-        "waiting for open_ident_start and imu ready before StartIdent"
+        "waiting for set autoident mode and imu ready before OpenIdent"
         if wait_boot_flags
         else f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}] "
-        "boot flags already received; preparing StartIdent"
+        "boot flags already received; preparing OpenIdent"
     )
     ident_print("[IDENT][STOP] 收到 event=finished/event=safety_stop 或按 Ctrl+C 停止。")
     wait_start = time.monotonic()
@@ -748,14 +768,14 @@ def read_serial_online(
     try:
         with serial.Serial(port, baudrate=baud, timeout=0.5) as ser:
             if not wait_boot_flags:
-                ser.write(START_IDENT_COMMAND)
+                ser.write(OPEN_IDENT_COMMAND)
                 ser.flush()
                 online.arm_command_start()
                 command_sent = True
                 ident_print(
                     f"[{datetime.now():%Y-%m-%d %H:%M:%S}] "
                     f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}]"
-                    "[COMMAND_SENT] StartIdent",
+                    "[COMMAND_SENT] OpenIdent",
                     flush=True,
                 )
             while True:
@@ -804,7 +824,7 @@ def read_serial_online(
                     ident_print(
                         f"[{datetime.now():%H:%M:%S}] "
                         f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}]"
-                        "[BOOT] received open_ident_start",
+                        "[BOOT] received set autoident mode",
                         flush=True,
                     )
                 if IMU_READY_RE.search(line) and not imu_ready_seen:
@@ -817,7 +837,7 @@ def read_serial_online(
                     )
 
                 if not command_sent and open_mode_seen and imu_ready_seen:
-                    ser.write(START_IDENT_COMMAND)
+                    ser.write(OPEN_IDENT_COMMAND)
                     ser.flush()
                     online.arm_command_start()
                     command_sent = True
@@ -825,7 +845,7 @@ def read_serial_online(
                     ident_print(
                         f"[{datetime.now():%Y-%m-%d %H:%M:%S}] "
                         f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}]"
-                        "[COMMAND_SENT] StartIdent",
+                        "[COMMAND_SENT] OpenIdent",
                         flush=True,
                     )
                     ident_print(
@@ -846,7 +866,7 @@ def read_serial_online(
                             +
                             (
                                 "[IDENT][RECEIVED_BUT_IGNORED] sample received "
-                                "before StartIdent was acknowledged"
+                                "before OpenIdent was acknowledged"
                                 if not online._started
                                 else "[IDENT][RECEIVED] first active identification sample"
                             ),
@@ -884,7 +904,7 @@ def read_serial_online(
                             f"[IDENT][HEARTBEAT][WAITING_START] "
                             f"elapsed={elapsed:.0f}s,lines={total_lines},"
                             f"samples_seen={sample_lines}; "
-                            "waiting for first sample after StartIdent",
+                            "waiting for first sample after OpenIdent",
                             flush=True,
                         )
                     elif not sample_match:
@@ -1040,6 +1060,349 @@ def calc_error_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         "mae": float(np.mean(abs_error)),
         "max_error": float(np.max(abs_error)),
     }
+
+
+def temperature_window_mask(series: Series) -> np.ndarray:
+    return (
+        np.isfinite(series.temp)
+        & np.isfinite(series.time)
+        & np.isfinite(series.duty)
+        & (series.temp >= PREFIT_TEMP_MIN_C)
+        & (series.temp <= PREFIT_TEMP_MAX_C)
+    )
+
+
+def assess_run_before_fit(run: FullRun) -> dict:
+    """Check raw-run completeness and excitation without fitting a model."""
+    reasons: list[str] = []
+    series = run.series
+    temperatures = np.asarray(series.temp, dtype=float)
+    duties = np.asarray(series.duty, dtype=float)
+    dt_values = np.asarray(series.dt, dtype=float)
+
+    stage_indices = [segment.index for segment in run.segments]
+    if stage_indices != list(range(EXPECTED_STAGE_COUNT)):
+        reasons.append(f"stage_sequence={stage_indices}")
+
+    stage_sample_counts: list[int] = []
+    stage_duty_errors: list[float] = []
+    for stage_index, segment in enumerate(run.segments):
+        stage_series = segment.series
+        stage_sample_counts.append(int(stage_series.temp.size))
+        if stage_series.temp.size < PREFIT_MIN_STAGE_SAMPLES:
+            reasons.append(
+                f"stage_{stage_index}_samples<{PREFIT_MIN_STAGE_SAMPLES}"
+            )
+        stage_dt = np.asarray(stage_series.dt, dtype=float)
+        if not np.any(np.isfinite(stage_dt) & (stage_dt > 1.0e-6)):
+            reasons.append(f"stage_{stage_index}_no_positive_dt")
+
+        duty_error = abs(
+            float(np.median(stage_series.duty))
+            - EXPECTED_DUTY_SEQUENCE[stage_index]
+        )
+        stage_duty_errors.append(duty_error)
+        if duty_error > 0.01:
+            reasons.append(
+                f"stage_{stage_index}_duty_error={duty_error:.4f}"
+            )
+
+    if temperatures.size < PREFIT_MIN_TOTAL_SAMPLES:
+        reasons.append(f"samples<{PREFIT_MIN_TOTAL_SAMPLES}")
+    if temperatures.size < 2:
+        reasons.append("too_few_samples")
+    if not (
+        np.all(np.isfinite(temperatures))
+        and np.all(np.isfinite(duties))
+        and np.all(np.isfinite(dt_values))
+        and np.all(np.isfinite(series.time))
+    ):
+        reasons.append("non_finite_data")
+
+    positive_dt = dt_values[dt_values > 1.0e-6]
+    max_dt_gap_s = (
+        float(np.max(positive_dt))
+        if positive_dt.size
+        else float("inf")
+    )
+    if positive_dt.size == 0:
+        reasons.append("no_positive_dt")
+    elif max_dt_gap_s > PREFIT_MAX_DT_GAP_S:
+        reasons.append(f"dt_gap>{PREFIT_MAX_DT_GAP_S:.2f}s")
+
+    duration_s = (
+        float(series.time[-1] - series.time[0])
+        if series.time.size >= 2
+        else 0.0
+    )
+    if duration_s < PREFIT_MIN_DURATION_S:
+        reasons.append(f"duration<{PREFIT_MIN_DURATION_S:.1f}s")
+
+    fit_mask = temperature_window_mask(series)
+    run.fit_mask = fit_mask
+    window_samples = int(np.count_nonzero(fit_mask))
+    if window_samples >= 2:
+        window_time = series.time[fit_mask]
+        window_temperature = series.temp[fit_mask]
+        window_duty = series.duty[fit_mask]
+        window_duration_s = float(window_time[-1] - window_time[0])
+        window_temp_span_c = float(np.ptp(window_temperature))
+        window_duty_span = float(np.ptp(window_duty))
+    else:
+        window_duration_s = 0.0
+        window_temp_span_c = 0.0
+        window_duty_span = 0.0
+
+    if window_samples < PREFIT_MIN_WINDOW_SAMPLES:
+        reasons.append(
+            f"window_samples<{PREFIT_MIN_WINDOW_SAMPLES}"
+        )
+    if window_duration_s < PREFIT_MIN_WINDOW_DURATION_S:
+        reasons.append(
+            f"window_duration<{PREFIT_MIN_WINDOW_DURATION_S:.1f}s"
+        )
+    if window_temp_span_c < PREFIT_MIN_WINDOW_TEMP_SPAN_C:
+        reasons.append(
+            f"window_temp_span<{PREFIT_MIN_WINDOW_TEMP_SPAN_C:.1f}C"
+        )
+    if window_duty_span < PREFIT_MIN_WINDOW_DUTY_SPAN:
+        reasons.append(
+            f"window_duty_span<{PREFIT_MIN_WINDOW_DUTY_SPAN:.2f}"
+        )
+
+    if temperatures.size:
+        temp_min_c = float(np.min(temperatures))
+        temp_max_c = float(np.max(temperatures))
+        temp_span_c = float(np.ptp(temperatures))
+        outside_window = (
+            (temperatures < PREFIT_TEMP_MIN_C)
+            | (temperatures > PREFIT_TEMP_MAX_C)
+        )
+        outside_ratio = float(np.mean(outside_window))
+    else:
+        temp_min_c = float("nan")
+        temp_max_c = float("nan")
+        temp_span_c = 0.0
+        outside_ratio = 1.0
+
+    if temp_span_c < PREFIT_MIN_TEMP_SPAN_C:
+        reasons.append(f"temp_span<{PREFIT_MIN_TEMP_SPAN_C:.1f}C")
+
+    edge_count = max(10, min(100, temperatures.size // 10))
+    if temperatures.size >= 2 * edge_count:
+        net_rise_c = float(
+            np.median(temperatures[-edge_count:])
+            - np.median(temperatures[:edge_count])
+        )
+    else:
+        net_rise_c = 0.0
+    if net_rise_c < PREFIT_MIN_NET_RISE_C:
+        reasons.append(f"net_rise<{PREFIT_MIN_NET_RISE_C:.1f}C")
+
+    duty_min = float(np.min(duties)) if duties.size else float("nan")
+    duty_max = float(np.max(duties)) if duties.size else float("nan")
+    duty_span = (
+        float(np.ptp(duties))
+        if duties.size
+        else 0.0
+    )
+    if duty_span < 0.10:
+        reasons.append("insufficient_duty_excitation")
+
+    return {
+        "run_index": run.run_index,
+        "hard_pass": not reasons,
+        "selected": not reasons,
+        "profile_outlier": False,
+        "reasons": reasons,
+        "samples": int(temperatures.size),
+        "duration_s": duration_s,
+        "stage_sample_counts": stage_sample_counts,
+        "stage_duty_errors": stage_duty_errors,
+        "max_dt_gap_s": max_dt_gap_s,
+        "temp_min_c": temp_min_c,
+        "temp_max_c": temp_max_c,
+        "temp_span_c": temp_span_c,
+        "outside_ratio": outside_ratio,
+        "net_rise_c": net_rise_c,
+        "duty_min": duty_min,
+        "duty_max": duty_max,
+        "duty_span": duty_span,
+        "window_samples": window_samples,
+        "window_duration_s": window_duration_s,
+        "window_temp_span_c": window_temp_span_c,
+        "window_duty_span": window_duty_span,
+        "profile_distance_c": float("nan"),
+    }
+
+
+def raw_stage_profile(
+    run: FullRun,
+    points_per_stage: int = PREFIT_PROFILE_POINTS_PER_STAGE,
+) -> np.ndarray:
+    """Return a duration-normalized, offset-free raw response profile."""
+    profiles: list[np.ndarray] = []
+    query = np.linspace(0.0, 1.0, points_per_stage)
+    for segment in run.segments:
+        temperature_c = np.asarray(segment.series.temp, dtype=float)
+        dt_values = np.asarray(segment.series.dt, dtype=float)
+        valid_dt = dt_values[np.isfinite(dt_values) & (dt_values > 1.0e-6)]
+        if temperature_c.size < 2 or valid_dt.size == 0:
+            raise ValueError(
+                f"run {run.run_index} stage {segment.index} has invalid dt"
+            )
+        fallback_dt = float(np.median(valid_dt))
+        dt_values = np.where(
+            np.isfinite(dt_values) & (dt_values > 1.0e-6),
+            dt_values,
+            fallback_dt,
+        )
+        time_s = np.r_[0.0, np.cumsum(dt_values[:-1])]
+        normalized_time = (time_s - time_s[0]) / (time_s[-1] - time_s[0])
+        profiles.append(
+            np.interp(
+                query,
+                normalized_time,
+                temperature_c - temperature_c[0],
+            )
+        )
+    return np.concatenate(profiles)
+
+
+def assess_candidate_runs_before_fit(
+    candidate_runs: list[FullRun],
+) -> list[FullRun]:
+    """Select training runs from raw data before any FOPDT fit is called."""
+    for run in candidate_runs:
+        if not run.prefit:
+            run.prefit = assess_run_before_fit(run)
+        run.selected_for_fit = bool(run.prefit["hard_pass"])
+
+    basic_candidates = [
+        run for run in candidate_runs if run.prefit["hard_pass"]
+    ]
+    if len(basic_candidates) >= 3:
+        profiles = np.vstack(
+            [raw_stage_profile(run) for run in basic_candidates]
+        )
+        center = np.median(profiles, axis=0)
+        distances = np.sqrt(
+            np.mean((profiles - center[np.newaxis, :]) ** 2, axis=1)
+        )
+        median_distance = float(np.median(distances))
+        mad_distance = float(
+            np.median(np.abs(distances - median_distance))
+        )
+        outlier_limit = max(
+            PREFIT_PROFILE_OUTLIER_FLOOR_C,
+            median_distance * 2.5,
+            median_distance + 4.0 * mad_distance,
+        )
+
+        for run, distance in zip(basic_candidates, distances):
+            assessment = run.prefit
+            assessment["profile_distance_c"] = float(distance)
+            assessment["profile_outlier_limit_c"] = outlier_limit
+            if (
+                distance > outlier_limit
+                and distance > median_distance + 0.25
+            ):
+                assessment["profile_outlier"] = True
+                assessment["reasons"].append(
+                    f"raw_profile_outlier={distance:.3f}C"
+                )
+                run.selected_for_fit = False
+
+    for run in candidate_runs:
+        run.prefit["selected"] = bool(run.selected_for_fit)
+    return candidate_runs
+
+
+def print_prefit_assessments(runs: list[FullRun]) -> None:
+    print("\nPre-fit raw-data screening:")
+    for run in runs:
+        assessment = run.prefit
+        role = assessment.get("role", "candidate")
+        if role == "warm-up":
+            status = "WARM-UP"
+        elif role == "validation":
+            status = "HOLD-OUT"
+        else:
+            status = "SELECT" if run.selected_for_fit else "REJECT"
+        reasons = ";".join(assessment["reasons"]) or "none"
+        print(
+            f"  run {run.run_index}: {status}, role={role}, "
+            f"samples={assessment['samples']}, "
+            f"duration={assessment['duration_s']:.3f}s, "
+            f"temp={assessment['temp_min_c']:.3f}"
+            f"->{assessment['temp_max_c']:.3f}C, "
+            f"fit_window_samples={assessment['window_samples']}, "
+            f"fit_window_duration={assessment['window_duration_s']:.3f}s, "
+            f"span={assessment['temp_span_c']:.3f}C, "
+            f"net_rise={assessment['net_rise_c']:.3f}C, "
+            f"profile_distance={assessment['profile_distance_c']:.3f}C, "
+            f"reason={reasons}"
+        )
+
+
+def write_prefit_assessments_csv(
+    runs: list[FullRun],
+    path: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "run",
+                "role",
+                "selected_for_fit",
+                "hard_pass",
+                "profile_outlier",
+                "samples",
+                "duration_s",
+                "temp_min_c",
+                "temp_max_c",
+                "fit_window_samples",
+                "fit_window_duration_s",
+                "fit_window_temp_span_c",
+                "fit_window_duty_span",
+                "temp_span_c",
+                "net_rise_c",
+                "duty_min",
+                "duty_max",
+                "max_dt_gap_s",
+                "profile_distance_c",
+                "reasons",
+            ]
+        )
+        for run in runs:
+            assessment = run.prefit
+            writer.writerow(
+                [
+                    run.run_index,
+                    assessment.get("role", "candidate"),
+                    int(run.selected_for_fit),
+                    int(assessment["hard_pass"]),
+                    int(assessment["profile_outlier"]),
+                    assessment["samples"],
+                    f"{assessment['duration_s']:.6f}",
+                    f"{assessment['temp_min_c']:.6f}",
+                    f"{assessment['temp_max_c']:.6f}",
+                    assessment["window_samples"],
+                    f"{assessment['window_duration_s']:.6f}",
+                    f"{assessment['window_temp_span_c']:.6f}",
+                    f"{assessment['window_duty_span']:.6f}",
+                    f"{assessment['temp_span_c']:.6f}",
+                    f"{assessment['net_rise_c']:.6f}",
+                    f"{assessment['duty_min']:.6f}",
+                    f"{assessment['duty_max']:.6f}",
+                    f"{assessment['max_dt_gap_s']:.6f}",
+                    f"{assessment['profile_distance_c']:.6f}",
+                    "|".join(assessment["reasons"]),
+                ]
+            )
+    print(f"Saved pre-fit assessment: {path}")
 
 
 def fit_common_shape(fit_results: list[tuple[Segment, dict, dict]]) -> dict:
@@ -1294,12 +1657,18 @@ def plot_run_parameter_summary(
 
 
 def concatenate_run_segments(segments: list[Segment], run_index: int) -> FullRun:
-    """把一轮中的 6 个 Heating 阶段拼成一条连续的输入/温度轨迹。"""
+    """把一轮中的 7 个 Heating 阶段拼成一条连续的输入/温度轨迹。"""
     ordered = sorted(segments, key=lambda item: item.index)
     if len(ordered) != EXPECTED_STAGE_COUNT:
         raise ValueError(
             f"run {run_index} contains {len(ordered)} stages; "
             f"expected {EXPECTED_STAGE_COUNT}"
+        )
+    stage_indices = [segment.index for segment in ordered]
+    if stage_indices != list(range(EXPECTED_STAGE_COUNT)):
+        raise ValueError(
+            f"run {run_index} stage sequence is {stage_indices}; "
+            f"expected {list(range(EXPECTED_STAGE_COUNT))}"
         )
 
     time_parts: list[np.ndarray] = []
@@ -1393,6 +1762,33 @@ def simulate_open_loop_plant(
     return prediction
 
 
+def reduce_series_for_fit_with_mask(
+    series: Series,
+    fit_mask: np.ndarray,
+    max_samples: int = 3000,
+) -> tuple[Series, np.ndarray]:
+    """Reduce search samples while keeping the local-fit mask aligned."""
+    if fit_mask.size != series.time.size:
+        raise ValueError("fit mask must match series size")
+    if series.time.size <= max_samples:
+        return series, fit_mask
+
+    indexes = np.linspace(0, series.time.size - 1, max_samples, dtype=int)
+    duty_changes = np.flatnonzero(
+        np.abs(np.diff(series.duty)) > 1.0e-6
+    ) + 1
+    indexes = np.unique(np.concatenate((indexes, duty_changes)))
+    reduced = Series(
+        time=series.time[indexes],
+        temp=series.temp[indexes],
+        duty=series.duty[indexes],
+        dt=np.diff(
+            np.r_[series.time[indexes[0]], series.time[indexes]]
+        ),
+    )
+    return reduced, fit_mask[indexes]
+
+
 def reduce_series_for_fit(series: Series, max_samples: int = 3000) -> Series:
     """只压缩网格搜索输入，最终误差仍使用完整原始轨迹计算。"""
     if series.time.size <= max_samples:
@@ -1419,11 +1815,22 @@ def fit_full_open_loop_run(run: FullRun) -> dict:
     if series.time.size < 20:
         raise ValueError(f"run {run.run_index} has too few samples")
 
+    fit_mask = run.fit_mask
+    if fit_mask is None or fit_mask.size != series.time.size:
+        fit_mask = temperature_window_mask(series)
+    if np.count_nonzero(fit_mask) < PREFIT_MIN_WINDOW_SAMPLES:
+        raise ValueError(
+            f"run {run.run_index} has too few 30-50C fit samples"
+        )
+
     duration_s = float(series.time[-1] - series.time[0])
     if duration_s <= 0.0:
         raise ValueError(f"run {run.run_index} duration is not positive")
 
-    fit_series = reduce_series_for_fit(series)
+    fit_series, reduced_fit_mask = reduce_series_for_fit_with_mask(
+        series,
+        fit_mask,
+    )
     max_delay = min(5.0, max(0.5, duration_s * 0.20))
     delay_grid = np.linspace(0.0, max_delay, 41)
     tau_grid = np.linspace(
@@ -1442,6 +1849,7 @@ def fit_full_open_loop_run(run: FullRun) -> dict:
     valid_dt = dt_s > 1.0e-6
     if not np.all(valid_dt):
         raise ValueError(f"run {run.run_index} contains invalid timestamps")
+    pair_mask = reduced_fit_mask[1:]
 
     best: dict | None = None
     for delay_index, delay_s in enumerate(delay_grid, start=1):
@@ -1460,8 +1868,8 @@ def fit_full_open_loop_run(run: FullRun) -> dict:
                 (np.ones_like(input_delayed), input_delayed)
             )
             ambient_c, gain = np.linalg.lstsq(
-                matrix,
-                equivalent_temp,
+                matrix[pair_mask],
+                equivalent_temp[pair_mask],
                 rcond=None,
             )[0]
             if gain <= 0.0:
@@ -1474,7 +1882,10 @@ def fit_full_open_loop_run(run: FullRun) -> dict:
                 float(delay_s),
                 float(ambient_c),
             )
-            metrics = calc_error_metrics(fit_series.temp, search_prediction)
+            metrics = calc_error_metrics(
+                fit_series.temp[reduced_fit_mask],
+                search_prediction[reduced_fit_mask],
+            )
             if best is None or metrics["rmse"] < best["rmse"]:
                 best = {
                     "gain": float(gain),
@@ -1511,11 +1922,15 @@ def fit_full_open_loop_run(run: FullRun) -> dict:
         best["delay_s"],
         best["ambient_c"],
     )
-    full_metrics = calc_error_metrics(series.temp, best["prediction"])
+    full_metrics = calc_error_metrics(
+        series.temp[fit_mask],
+        best["prediction"][fit_mask],
+    )
     best.update(full_metrics)
     best["duration_s"] = duration_s
     best["samples"] = int(series.time.size)
     best["fit_samples"] = int(fit_series.time.size)
+    best["fit_window_samples"] = int(np.count_nonzero(fit_mask))
     return best
 
 
@@ -1524,18 +1939,31 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
     if len(runs) < 2:
         raise ValueError("joint fitting needs at least two complete runs")
 
-    fit_series = [reduce_series_for_fit(run.series, 1800) for run in runs]
-    tau_values = np.asarray(
-        [run.fit["tau_s"] for run in runs],
-        dtype=float,
-    )
-    delay_values = np.asarray(
-        [run.fit["delay_s"] for run in runs],
-        dtype=float,
-    )
-    tau_min = max(0.5, float(np.min(tau_values) * 0.65))
-    tau_max = max(tau_min + 1.0, float(np.max(tau_values) * 1.35))
-    delay_max = min(3.0, max(0.5, float(np.max(delay_values) * 1.5 + 0.25)))
+    fit_series_and_masks: list[tuple[Series, np.ndarray]] = []
+    for run in runs:
+        fit_mask = run.fit_mask
+        if fit_mask is None or fit_mask.size != run.series.time.size:
+            fit_mask = temperature_window_mask(run.series)
+        if np.count_nonzero(fit_mask) < PREFIT_MIN_WINDOW_SAMPLES:
+            raise ValueError(
+                f"run {run.run_index} has too few 30-50C fit samples"
+            )
+        fit_series_and_masks.append(
+            reduce_series_for_fit_with_mask(
+                run.series,
+                fit_mask,
+                1800,
+            )
+        )
+    fit_series = [item[0] for item in fit_series_and_masks]
+    fit_masks = [item[1] for item in fit_series_and_masks]
+
+    # Bound the final search from observed experiment duration only. Individual
+    # FOPDT fits are deliberately not used to decide the joint-fit search area.
+    max_duration_s = max(float(run.series.time[-1]) for run in runs)
+    tau_min = max(0.5, max_duration_s * 0.01)
+    tau_max = max(2.0, min(80.0, max_duration_s * 1.5))
+    delay_max = min(5.0, max(0.5, max_duration_s * 0.20))
     tau_grid = np.linspace(tau_min, tau_max, 100)
     delay_grid = np.linspace(0.0, delay_max, 61)
 
@@ -1543,7 +1971,9 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
         f"[{datetime.now():%H:%M:%S}] "
         "[IDENT][JOINT_FIT][START] "
         f"runs={len(runs)},grid={delay_grid.size}x{tau_grid.size},"
-        f"fit_samples_per_run<=1800",
+        f"fit_samples_per_run<=1800,"
+        f"tau_range={tau_min:.3f}..{tau_max:.3f}s,"
+        f"delay_range=0..{delay_max:.3f}s",
         flush=True,
     )
 
@@ -1552,17 +1982,16 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
         for tau_s in tau_grid:
             z_parts: list[np.ndarray] = []
             u_parts: list[np.ndarray] = []
-            for series in fit_series:
+            for series, fit_mask in zip(fit_series, fit_masks):
                 dt_s = np.diff(series.time)
                 alpha = np.exp(-dt_s / tau_s)
                 beta = 1.0 - alpha
-                z = (series.temp[1:] - alpha * series.temp[:-1]) / beta
-                u = delayed_duty(series.time, series.duty, float(delay_s))
-                z_parts.append(z)
-                u_parts.append(u)
+                z_all = (series.temp[1:] - alpha * series.temp[:-1]) / beta
+                u_all = delayed_duty(series.time, series.duty, float(delay_s))
+                pair_mask = fit_mask[1:]
+                z_parts.append(z_all[pair_mask])
+                u_parts.append(u_all[pair_mask])
 
-            z_all = np.concatenate(z_parts)
-            u_all = np.concatenate(u_parts)
             means_z = np.asarray([np.mean(z) for z in z_parts])
             means_u = np.asarray([np.mean(u) for u in u_parts])
             centered_z = np.concatenate(
@@ -1581,9 +2010,10 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
             ambient_values = means_z - gain * means_u
 
             total_sse = 0.0
-            for run, series, ambient_c in zip(
+            for run, series, fit_mask, ambient_c in zip(
                 runs,
                 fit_series,
+                fit_masks,
                 ambient_values,
             ):
                 prediction = simulate_open_loop_plant(
@@ -1594,7 +2024,9 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
                     float(ambient_c),
                 )
                 total_sse += float(
-                    np.sum((prediction - series.temp) ** 2)
+                    np.sum(
+                        (prediction[fit_mask] - series.temp[fit_mask]) ** 2
+                    )
                 )
 
             if best is None or total_sse < best["sse"]:
@@ -1634,10 +2066,23 @@ def fit_joint_open_loop_runs(runs: list[FullRun]) -> dict:
             float(ambient_c),
         )
         predictions.append(prediction)
-        metrics.append(calc_error_metrics(run.series.temp, prediction))
+        fit_mask = run.fit_mask
+        if fit_mask is None or fit_mask.size != run.series.time.size:
+            fit_mask = temperature_window_mask(run.series)
+        metrics.append(
+            calc_error_metrics(
+                run.series.temp[fit_mask],
+                prediction[fit_mask],
+            )
+        )
 
     best["prediction_by_run"] = predictions
     best["metrics_by_run"] = metrics
+    best["fit_run_indices"] = [run.run_index for run in runs]
+    best["ambient_c_by_run_index"] = {
+        run.run_index: float(ambient_c)
+        for run, ambient_c in zip(runs, best["ambient_c_by_run"])
+    }
     best["ambient_c"] = float(np.mean(best["ambient_c_by_run"]))
     best["rmse"] = float(np.mean([item["rmse"] for item in metrics]))
     best["mae"] = float(np.mean([item["mae"] for item in metrics]))
@@ -1731,7 +2176,11 @@ def write_full_run_data_csv(runs: list[FullRun], path: Path) -> None:
             ]
         )
         for run in runs:
-            fit_prediction = run.fit["prediction"]
+            fit_prediction = (
+                run.fit["prediction"]
+                if "prediction" in run.fit
+                else np.full(run.series.time.size, np.nan)
+            )
             mean_prediction = (
                 run.mean_prediction
                 if run.mean_prediction is not None
@@ -1759,6 +2208,7 @@ def plot_six_run_comparison(
     mean_fit: dict,
     path: Path,
     excluded_run_count: int = 0,
+    validation_run_count: int = 0,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -1770,31 +2220,46 @@ def plot_six_run_comparison(
     common_time = np.linspace(0.0, common_end, 1200)
     measured_stack: list[np.ndarray] = []
     mean_model_stack: list[np.ndarray] = []
+    validation_start = len(runs) - validation_run_count + 1
 
     for color, run in zip(colors, runs):
         label = f"run {run.run_index}"
-        if run.run_index <= excluded_run_count:
-            run_ambient = float(mean_fit["ambient_c"])
-        else:
-            formal_index = run.run_index - excluded_run_count - 1
+        is_warmup = run.run_index <= excluded_run_count
+        is_validation = (
+            validation_run_count > 0
+            and run.run_index >= validation_start
+        )
+        if run.run_index in mean_fit.get("fit_run_indices", []):
             run_ambient = float(
-                mean_fit["ambient_c_by_run"][formal_index]
+                mean_fit["ambient_c_by_run_index"][run.run_index]
             )
+            role = "fit"
+        elif is_validation:
+            # 验证轮不能重新估计 ambient，只使用训练轮平均偏置。
+            run_ambient = float(mean_fit["ambient_c"])
+            role = "validation"
+        elif not is_warmup:
+            run_ambient = float(mean_fit["ambient_c"])
+            role = "rejected"
+        else:
+            run_ambient = float(mean_fit["ambient_c"])
+            role = "warm-up"
         axes[0].plot(
             run.series.time,
             run.series.temp,
             color=color,
             linewidth=1.2,
-            label=f"{label} measured",
+            label=f"{label} {role} measured",
         )
-        axes[0].plot(
-            run.series.time,
-            run.fit["prediction"],
-            color=color,
-            linestyle="--",
-            linewidth=1.0,
-            label=f"{label} fit",
-        )
+        if "prediction" in run.fit:
+            axes[0].plot(
+                run.series.time,
+                run.fit["prediction"],
+                color=color,
+                linestyle="--",
+                linewidth=1.0,
+                label=f"{label} individual fit",
+            )
         run.mean_prediction = simulate_open_loop_plant(
             run.series,
             mean_fit["gain"],
@@ -1840,7 +2305,7 @@ def plot_six_run_comparison(
         measured_mean,
         color="black",
         linewidth=3.0,
-        label="six-run measured mean",
+        label="all-run measured mean",
     )
     axes[0].plot(
         common_time,
@@ -1848,17 +2313,12 @@ def plot_six_run_comparison(
         color="black",
         linestyle="-.",
         linewidth=2.5,
-        label="six-run joint-model mean",
+        label="all-run joint replay mean",
     )
 
     axes[0].set_ylabel("Temperature (C)")
     axes[0].set_title(
-        "IMU Open-Loop: Runs, Individual Fits, and Joint Aggregate"
-        + (
-            f" (first {excluded_run_count} warm-up run excluded)"
-            if excluded_run_count > 0
-            else ""
-        )
+        "IMU Open-Loop: Training and Hold-Out Validation Replay"
     )
     axes[0].grid(True, alpha=0.3)
     axes[0].legend(ncol=3, fontsize=8)
@@ -1871,7 +2331,7 @@ def plot_six_run_comparison(
     axes[2].axhline(0.0, color="black", linewidth=0.8)
     axes[2].set_xlabel("Time from complete run start (s)")
     axes[2].set_ylabel("Mean-model error (C)")
-    axes[2].set_title("Error of Six-Run Joint Transfer Function")
+    axes[2].set_title("Joint-model Replay Error")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend(ncol=2, fontsize=8)
 
@@ -1899,6 +2359,7 @@ def plot_full_run_parameter_summary(
     mean_fit: dict,
     path: Path,
     excluded_run_count: int = 0,
+    validation_run_count: int = 0,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -1948,12 +2409,9 @@ def plot_full_run_parameter_summary(
         axis.legend(fontsize=8)
     axes[1, 2].set_visible(False)
     figure.suptitle(
-        "Open-Loop Fits and Joint Dynamic Parameters"
-        + (
-            f" (first {excluded_run_count} warm-up run excluded)"
-            if excluded_run_count > 0
-            else ""
-        )
+        "Training Open-Loop Fits and Joint Dynamic Parameters"
+        f" (warm-up={excluded_run_count},"
+        f" validation={validation_run_count} excluded)"
     )
     figure.tight_layout()
     figure.savefig(path, dpi=150, bbox_inches="tight")
@@ -1973,7 +2431,7 @@ def run_online_identification(
         ident_print(
             f"\n[{datetime.now():%H:%M:%S}] "
             f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}][WAITING] "
-            "waiting for one complete 6-stage open-loop run",
+            "waiting for one complete 7-stage open-loop run",
             flush=True,
         )
         segments = read_serial_online(
@@ -1986,19 +2444,78 @@ def run_online_identification(
             segment.source = f"run_{run_index}"
 
         run = concatenate_run_segments(segments, run_index)
-        run.fit = fit_full_open_loop_run(run)
         runs.append(run)
+
+    minimum_runs = WARMUP_RUN_COUNT + VALIDATION_RUN_COUNT + 1
+    if len(runs) < minimum_runs:
+        raise ValueError(
+            "not enough runs for warm-up, training, and validation split"
+        )
+
+    fit_end = len(runs) - VALIDATION_RUN_COUNT
+    candidate_runs = runs[WARMUP_RUN_COUNT:fit_end]
+    validation_runs = runs[fit_end:]
+    validation_run_ids = {run.run_index for run in validation_runs}
+
+    for run in runs:
+        run.prefit = assess_run_before_fit(run)
+        run.selected_for_fit = False
+        if run.run_index <= WARMUP_RUN_COUNT:
+            run.prefit["role"] = "warm-up"
+        elif run.run_index in validation_run_ids:
+            run.prefit["role"] = "validation"
+        else:
+            run.prefit["role"] = "candidate"
+
+    assess_candidate_runs_before_fit(candidate_runs)
+    fit_runs = [
+        run for run in candidate_runs if run.selected_for_fit
+    ]
+    print_prefit_assessments(runs)
+    write_prefit_assessments_csv(
+        runs,
+        Path(f"{result_prefix}_prefit_assessment.csv"),
+    )
+
+    if len(fit_runs) < 2:
+        raise ValueError(
+            "pre-fit screening left fewer than two training runs: "
+            + ",".join(str(run.run_index) for run in fit_runs)
+        )
+
+    ident_print(
+        f"[{datetime.now():%H:%M:%S}] [IDENT][JOINT_FIT][CONFIG] "
+        f"warmup_runs_excluded={WARMUP_RUN_COUNT},"
+        f"formal_runs={len(fit_runs)},"
+        f"formal_run_ids="
+        f"{','.join(str(run.run_index) for run in fit_runs)}",
+        flush=True,
+    )
+    ident_print(
+        f"[{datetime.now():%H:%M:%S}] [IDENT][VALIDATION][CONFIG] "
+        f"validation_runs={len(validation_runs)},"
+        f"validation_run_ids="
+        f"{','.join(str(run.run_index) for run in validation_runs)}",
+        flush=True,
+    )
+    mean_fit = fit_joint_open_loop_runs(fit_runs)
+    mean_fit["fit_run_indices"] = [run.run_index for run in fit_runs]
+
+    # Individual fits are diagnostics only and happen after pre-fit selection.
+    for run in fit_runs:
+        run.fit = fit_full_open_loop_run(run)
         fit = run.fit
         run_results.append(
             {
-                "run_index": run_index,
+                "run_index": run.run_index,
                 "fit": fit,
             }
         )
         ident_print(
             f"[{datetime.now():%H:%M:%S}] "
-            f"[IDENT][RUN {run_index}/{EXPECTED_RUN_COUNT}][FIT_DONE] "
-            f"stages={len(segments)},samples={fit['samples']},"
+            f"[IDENT][RUN {run.run_index}/{EXPECTED_RUN_COUNT}][FIT_DONE] "
+            f"samples={fit['samples']},"
+            f"fit_window_samples={fit['fit_window_samples']},"
             f"duration={fit['duration_s']:.3f}s,"
             f"K={fit['gain']:.6f}C/duty,"
             f"tau={fit['tau_s']:.3f}s,"
@@ -2009,59 +2526,47 @@ def run_online_identification(
             f"max_error={fit['max_error']:.4f}C",
             flush=True,
         )
-        print(
-            f"Run {run_index}/{EXPECTED_RUN_COUNT} open-loop transfer function:"
-        )
-        print(
-            f"  G_{run_index}(s) = {fit['gain']:.6f} / "
-            f"({fit['tau_s']:.6f}*s + 1) * "
-            f"exp(-{fit['delay_s']:.6f}*s)"
-        )
-        print(
-            f"  ambient={fit['ambient_c']:.6f} C, "
-            f"RMSE={fit['rmse']:.6f} C, "
-            f"MAE={fit['mae']:.6f} C, "
-            f"max_error={fit['max_error']:.6f} C"
-        )
 
-    if len(runs) <= WARMUP_RUN_COUNT:
-        raise ValueError(
-            "not enough formal runs after warm-up exclusion"
-        )
-
-    fit_runs = runs[WARMUP_RUN_COUNT:]
-    ident_print(
-        f"[{datetime.now():%H:%M:%S}] [IDENT][JOINT_FIT][CONFIG] "
-        f"warmup_runs_excluded={WARMUP_RUN_COUNT},"
-        f"formal_runs={len(fit_runs)},"
-        f"formal_run_ids="
-        f"{','.join(str(run.run_index) for run in fit_runs)}",
-        flush=True,
-    )
-    mean_fit = fit_joint_open_loop_runs(fit_runs)
-    mean_rmses: list[float] = []
-    mean_maes: list[float] = []
-    mean_max_errors: list[float] = []
-    for run_index, run in enumerate(runs):
+    for run, ambient in zip(
+        fit_runs,
+        mean_fit["ambient_c_by_run"],
+    ):
         run.mean_prediction = simulate_open_loop_plant(
             run.series,
             mean_fit["gain"],
             mean_fit["tau_s"],
             mean_fit["delay_s"],
-            float(mean_fit["ambient_c_by_run"][run_index]),
+            float(ambient),
         )
         run.mean_error = run.mean_prediction - run.series.temp
-        mean_metrics = calc_error_metrics(run.series.temp, run.mean_prediction)
-        if run.run_index > WARMUP_RUN_COUNT:
-            mean_rmses.append(mean_metrics["rmse"])
-            mean_maes.append(mean_metrics["mae"])
-            mean_max_errors.append(mean_metrics["max_error"])
 
-    mean_fit["rmse"] = float(np.mean(mean_rmses))
-    mean_fit["mae"] = float(np.mean(mean_maes))
-    mean_fit["max_error"] = float(np.mean(mean_max_errors))
+    validation_metrics: list[dict] = []
+    for run in validation_runs:
+        # 验证轮只回放训练模型，不重新估计动态参数或 ambient。
+        run.mean_prediction = simulate_open_loop_plant(
+            run.series,
+            mean_fit["gain"],
+            mean_fit["tau_s"],
+            mean_fit["delay_s"],
+            mean_fit["ambient_c"],
+        )
+        run.mean_error = run.mean_prediction - run.series.temp
+        validation_mask = run.fit_mask
+        if (
+            validation_mask is None
+            or validation_mask.size != run.series.time.size
+        ):
+            validation_mask = temperature_window_mask(run.series)
+        validation_metrics.append(
+            calc_error_metrics(
+                run.series.temp[validation_mask],
+                run.mean_prediction[validation_mask],
+            )
+        )
 
-    print("\nSix individual open-loop transfer functions:")
+    mean_fit["validation_metrics_by_run"] = validation_metrics
+
+    print("\nTraining-run individual open-loop transfer functions:")
     for item in run_results:
         fit = item["fit"]
         print(
@@ -2071,7 +2576,10 @@ def run_online_identification(
             f"ambient={fit['ambient_c']:.6f} C, "
             f"RMSE={fit['rmse']:.6f} C"
         )
-    print("\nJoint six-run open-loop transfer function:")
+    print(
+        "\nJoint training-run open-loop transfer function "
+        f"(runs {','.join(str(run.run_index) for run in fit_runs)}):"
+    )
     print(
         f"  G_mean(s) = {mean_fit['gain']:.6f} / "
         f"({mean_fit['tau_s']:.6f}*s + 1) * "
@@ -2080,32 +2588,50 @@ def run_online_identification(
     print(
         "  ambient offsets : "
         + ", ".join(
-            f"run{i + 1}={value:.6f} C"
-            for i, value in enumerate(mean_fit["ambient_c_by_run"])
+            f"run{run.run_index}={value:.6f} C"
+            for run, value in zip(
+                fit_runs,
+                mean_fit["ambient_c_by_run"],
+            )
         )
     )
-    print(f"  joint-model RMSE : {mean_fit['rmse']:.6f} C")
-    print(f"  joint-model MAE  : {mean_fit['mae']:.6f} C")
-    print(f"  joint-model max error : {mean_fit['max_error']:.6f} C")
+    print(f"  joint-model RMSE (30-50C) : {mean_fit['rmse']:.6f} C")
+    print(f"  joint-model MAE  (30-50C) : {mean_fit['mae']:.6f} C")
+    print(
+        "  joint-model max error (30-50C) : "
+        f"{mean_fit['max_error']:.6f} C"
+    )
+    print("\nHold-out open-loop replay validation (30-50C window):")
+    for run, metrics in zip(validation_runs, validation_metrics):
+        print(
+            f"  run {run.run_index}: "
+            f"ambient={mean_fit['ambient_c']:.6f} C, "
+            f"RMSE={metrics['rmse']:.6f} C, "
+            f"MAE={metrics['mae']:.6f} C, "
+            f"max_error={metrics['max_error']:.6f} C"
+        )
 
     plot_six_run_comparison(
         runs,
         mean_fit,
         Path(f"{result_prefix}_six_run_comparison.png"),
         excluded_run_count=WARMUP_RUN_COUNT,
+        validation_run_count=VALIDATION_RUN_COUNT,
     )
     plot_full_run_parameter_summary(
         run_results,
         mean_fit,
         Path(f"{result_prefix}_six_run_parameters.png"),
         excluded_run_count=WARMUP_RUN_COUNT,
+        validation_run_count=VALIDATION_RUN_COUNT,
     )
     ident_print(
         f"[{datetime.now():%H:%M:%S}] [IDENT][DONE] "
         f"completed_runs={len(runs)}/{EXPECTED_RUN_COUNT},"
         f"formal_runs={len(fit_runs)},"
-        f"warmup_excluded={WARMUP_RUN_COUNT}; "
-        "six-stage trajectories were fitted as complete runs",
+        f"warmup_excluded={WARMUP_RUN_COUNT},"
+        f"validation_runs={len(validation_runs)}; "
+        "validation replay used the training joint model",
         flush=True,
     )
     return 0

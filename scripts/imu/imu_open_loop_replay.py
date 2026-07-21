@@ -6,8 +6,8 @@ The script does not fit any parameter. It only compares:
     fixed-model temperature replayed with the measured duty
 
 Serial capture flow (same as imu_temp_identify.py):
-    1. Wait for open_ident_start + imu ready boot flags
-    2. Send StartIdent command
+    1. Wait for set autoident mode + imu ready boot flags
+    2. Send OpenIdent command
     3. Collect all samples (all states)
     4. Send Stop on Finished / Safety Stop
 
@@ -19,7 +19,7 @@ Examples:
 
     python scripts/imu/imu_open_loop_replay.py run.log
     python scripts/imu/imu_open_loop_replay.py --port COM21
-    python scripts/imu/imu_open_loop_replay.py run.log --gain 41.888 --tau 12.049 --delay 2.45
+    python scripts/imu/imu_open_loop_replay.py run.log --gain 42.790411 --tau 12.254200 --delay 2.15 --offset 36.866
 """
 
 from __future__ import annotations
@@ -37,9 +37,10 @@ SERIAL_PORT = "COM21"
 SERIAL_BAUD = 921600
 
 # Current open-loop model used by tune_imu_pi.py.
-MODEL_GAIN          = 41.888        # 增益 (C/duty)
-MODEL_TAU_S         = 12.049        # 时间常数 (s)
-MODEL_DELAY_S       = 2.450         # 纯延迟 (s)
+MODEL_GAIN          = 46.256014         # 增益 (C/duty)
+MODEL_TAU_S         = 11.460969         # 时间常数 (s)
+MODEL_DELAY_S       = 1.700000          # 纯延迟 (s)
+MODEL_BIAS_C        = 35.823000         # 辨识截距（不是物理环境温度）
 
 SAMPLE_RE = re.compile(
     r"seq=(?P<seq>\d+),"
@@ -50,12 +51,12 @@ SAMPLE_RE = re.compile(
     r"temp_c=(?P<temp>[-+0-9.eE]+),"
     r"duty=(?P<duty>[-+0-9.eE]+)"
 )
-OPEN_MODE_START_RE = re.compile(r"\bopen_ident_start\b")
+OPEN_MODE_START_RE = re.compile(r"\bset autoident mode\b")
 IMU_READY_RE = re.compile(r"\bimu ready\b")
 COOLDOWN_DONE_RE = re.compile(r"\bCooldown Done\b")
 FINISH_RE = re.compile(r"\bFinished\b")
 SAFETY_STOP_RE = re.compile(r"\bSafety Stop\b")
-START_IDENT_CMD = b"StartIdent"
+OPEN_IDENT_CMD = b"OpenIdent"
 STOP_IDENT_CMD = b"Stop"
 
 
@@ -110,7 +111,7 @@ def parse_log_file(path: Path) -> OpenLoopLog:
         states.append(int(match.group("state")))
 
     if not started:
-        raise ValueError("open_ident_start was not found in the log")
+        raise ValueError("set autoident mode was not found in the log")
     if len(time_us) < 3:
         raise ValueError("fewer than three open-loop samples were found")
 
@@ -139,7 +140,7 @@ def capture_serial(port: str, baud: int) -> OpenLoopLog:
 
     print(f"[{datetime.now():%H:%M:%S}] [REPLAY][READY] serial={port},baud={baud}")
     print(f"[{datetime.now():%H:%M:%S}] [REPLAY][WAITING] "
-          "waiting for open_ident_start + imu ready boot flags")
+          "waiting for set autoident mode + imu ready boot flags")
 
     try:
         with serial.Serial(port, baudrate=baud, timeout=0.5) as ser:
@@ -153,7 +154,7 @@ def capture_serial(port: str, baud: int) -> OpenLoopLog:
                 if OPEN_MODE_START_RE.search(line) and not open_mode_seen:
                     open_mode_seen = True
                     print(f"[{datetime.now():%H:%M:%S}] [REPLAY][BOOT] "
-                          "open_ident_start received")
+                          "set autoident mode received")
 
                 if IMU_READY_RE.search(line) and not imu_ready_seen:
                     imu_ready_seen = True
@@ -161,11 +162,11 @@ def capture_serial(port: str, baud: int) -> OpenLoopLog:
                           "imu ready received")
 
                 if not command_sent and open_mode_seen and imu_ready_seen:
-                    ser.write(START_IDENT_CMD)
+                    ser.write(OPEN_IDENT_CMD)
                     ser.flush()
                     command_sent = True
                     print(f"[{datetime.now():%H:%M:%S}] [REPLAY][START] "
-                          "StartIdent sent")
+                          "OpenIdent sent")
 
                 if not command_sent:
                     continue
@@ -231,23 +232,19 @@ def replay_model(
     gain: float,
     tau_s: float,
     delay_s: float,
+    offset_c: float,
 ) -> np.ndarray:
     if gain <= 0.0 or tau_s <= 0.0 or delay_s < 0.0:
         raise ValueError("gain and tau must be positive; delay cannot be negative")
 
     prediction = np.empty_like(log.temperature_c)
     prediction[0] = log.temperature_c[0]
-    initial_duty = log.duty[0]
     input_duty = delayed_duty(log.time_s, log.duty, delay_s)
 
     for index in range(1, log.time_s.size):
         dt_s = max(log.time_s[index] - log.time_s[index - 1], 1.0e-6)
         alpha = np.exp(-dt_s / tau_s)
-        # 以实测初始温度和初始 duty 为基准，只回放 duty 变化造成的温升。
-        equilibrium_c = (
-            log.temperature_c[0]
-            + gain * (input_duty[index - 1] - initial_duty)
-        )
+        equilibrium_c = offset_c + gain * input_duty[index - 1]
         prediction[index] = (
             alpha * prediction[index - 1]
             + (1.0 - alpha) * equilibrium_c
@@ -256,14 +253,19 @@ def replay_model(
     return prediction
 
 
-def print_metrics(log: OpenLoopLog, prediction: np.ndarray) -> None:
+def print_metrics(
+    log: OpenLoopLog,
+    prediction: np.ndarray,
+    *,
+    label: str = "Open-loop model replay",
+) -> None:
     error = prediction - log.temperature_c
     rmse = float(np.sqrt(np.mean(error * error)))
     mae = float(np.mean(np.abs(error)))
     max_error = float(np.max(np.abs(error)))
     max_index = int(np.argmax(np.abs(error)))
 
-    print("Open-loop model replay:")
+    print(f"{label}:")
     print(f"  samples       : {log.time_s.size}")
     print(f"  duration      : {log.time_s[-1]:.3f} s")
     print(f"  temperature   : {log.temperature_c[0]:.3f} -> "
@@ -281,43 +283,23 @@ def plot_result(log: OpenLoopLog, prediction: np.ndarray) -> None:
     error = prediction - log.temperature_c
     figure, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
 
-    axes[0].plot(
-        log.time_s,
-        log.temperature_c,
-        color="tab:blue",
-        linewidth=1.2,
-        label="measured temperature",
-    )
-    axes[0].plot(
-        log.time_s,
-        prediction,
-        color="tab:orange",
-        linestyle="--",
-        linewidth=1.6,
-        label="fixed transfer-function replay",
-    )
+    axes[0].plot(log.time_s, log.temperature_c, color="tab:blue",
+                 linewidth=1.2, label="measured temperature")
+    axes[0].plot(log.time_s, prediction, color="tab:orange",
+                 linestyle="--", linewidth=1.6,
+                 label="fixed transfer-function replay")
     axes[0].set_ylabel("Temperature (C)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
-    axes[1].plot(
-        log.time_s,
-        log.duty,
-        color="tab:green",
-        linewidth=1.1,
-        label="measured duty",
-    )
+    axes[1].step(log.time_s, log.duty, color="tab:green",
+                 linewidth=1.1, where="post", label="measured duty")
     axes[1].set_ylabel("Duty")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
 
-    axes[2].plot(
-        log.time_s,
-        error,
-        color="tab:red",
-        linewidth=1.0,
-        label="model error",
-    )
+    axes[2].plot(log.time_s, error, color="tab:red", linewidth=1.0,
+                 label="model error")
     axes[2].axhline(0.0, color="black", linewidth=0.8)
     axes[2].axhline(0.5, color="gray", linestyle=":", linewidth=0.8)
     axes[2].axhline(-0.5, color="gray", linestyle=":", linewidth=0.8)
@@ -326,16 +308,12 @@ def plot_result(log: OpenLoopLog, prediction: np.ndarray) -> None:
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
 
-    change_indexes = np.flatnonzero(np.diff(log.stage) != 0) + 1
-    for idx in change_indexes:
-        for axis in axes:
-            axis.axvline(
-                log.time_s[idx],
-                color="tab:purple",
-                linestyle=":",
-                linewidth=0.8,
-                alpha=0.65,
-            )
+    # 标记 stage 切换位置
+    change_idx = np.flatnonzero(np.diff(log.stage) != 0) + 1
+    for idx in change_idx:
+        for ax in axes:
+            ax.axvline(log.time_s[idx], color="tab:purple",
+                       linestyle=":", linewidth=0.8, alpha=0.65)
 
     figure.suptitle("IMU Heater Open-Loop Transfer-Function Replay")
     figure.tight_layout()
@@ -352,6 +330,7 @@ def main() -> int:
     parser.add_argument("--gain", type=float, default=MODEL_GAIN)
     parser.add_argument("--tau", type=float, default=MODEL_TAU_S)
     parser.add_argument("--delay", type=float, default=MODEL_DELAY_S)
+    parser.add_argument("--offset", type=float, default=MODEL_BIAS_C)
     parser.add_argument("--no-plot", action="store_true")
     args = parser.parse_args()
 
@@ -371,14 +350,13 @@ def main() -> int:
         f"[REPLAY][MODEL] source={source},"
         f"G(s)={args.gain:.3f}/({args.tau:.3f}*s+1)*"
         f"exp(-{args.delay:.3f}*s),"
-        "deviation replay",
+        f"bias={args.offset:.3f}C",
         flush=True,
     )
+
+    # 连续 replay：整个 log 一次跑完，保留热惯性。
     prediction = replay_model(
-        log,
-        args.gain,
-        args.tau,
-        args.delay,
+        log, args.gain, args.tau, args.delay, args.offset,
     )
     print_metrics(log, prediction)
 
