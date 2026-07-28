@@ -72,3 +72,5 @@ Diagnostics:
     - unused_variable
     - no_member
     - "#pragma_messages"
+    - anon_bitfield_qualifiers
+    - -Wint-to-pointer-cast

@@ -40,6 +40,7 @@ endif()
 set(ZEPHYR_EXTRA_MODULES
   "${SDK_GLUE_DIR}"
   "D:/Zephyr_HPMicro/modules/lib/CherryUSB"
+  "D:/Zephyr/modules/user/usb"
 )
 set(ZEPHYR_SDK_INSTALL_DIR "D:/Zephyr/zephyr-sdk-0.16.8" CACHE PATH "")
 
@@ -61,6 +62,7 @@ target_compile_options(app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-sta
 if(CONFIG_CPU_CORTEX_M)
   zephyr_include_directories("${ZEPHYR_BASE}/../modules/hal/cmsis/CMSIS/Core/Include")
   zephyr_include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
+  zephyr_include_directories("D:/Zephyr/modules/user/usb")
   zephyr_compile_definitions(__PROGRAM_START)
 endif()
 
