@@ -56,6 +56,7 @@ project(my_project)
 # 系统入口
 target_sources(app PRIVATE src/main.c)
 target_include_directories(app PRIVATE src)
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/init)
 target_compile_options(app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>)
 
 # CMSIS 头路径（core_cm4.h 等）
@@ -73,5 +74,6 @@ if(CONFIG_${CONFIG_SYM})
   add_subdirectory(modules)
   add_subdirectory(topic)
   add_subdirectory(cmd)
-  add_subdirectory(${PROJ_DIR})
+  add_subdirectory(init)
+  add_subdirectory(project)
 endif()

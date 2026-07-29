@@ -27,7 +27,7 @@ config PRJ_TEST
     help
         测试项目
 if PRJ_TEST
-rsource "project/thread/Kconfig"
+rsource "project/Kconfig"
 endif
 
 

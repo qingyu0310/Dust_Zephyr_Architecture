@@ -11,7 +11,8 @@
 - IMU、遥控器、电机和功率计等设备能力属于模块层；
 - PID、滤波、姿态解算、RLS、电机辨识和 TFLM 属于算法层；
 - 线程之间的数据形状和传输语义属于 topic 层；
-- 启动注册、变量调试和链接段扩展属于 `cmd/` 与 `project/apps/`；
+- 启动编排与注册执行属于 `init/`；
+- 变量调试、蜂鸣器、Flash 工具和链接段定义属于 `cmd/`；
 - 主机侧 Python 脚本负责硬件测试、日志回放、参数辨识和性能分析。
 
 因此，`tflm` 不是一个单纯的 CubeMX 工程，也不是一个只提供目录模板的空框架。它是一套正在由真实 IMU、Remote、CAN、电机、底盘、云台和实验脚本不断推动演进的嵌入式架构。
@@ -28,17 +29,18 @@
 6. [启动链](#启动链)
 7. [编译期装配](#编译期装配)
 8. [目录说明](#目录说明)
-9. [`cmd/` 调试命令层](#cmd-调试命令层)
-10. [`algorithm/` 算法层](#algorithm-算法层)
-11. [`modules/` 设备模块层](#modules-设备模块层)
-12. [`topic/` 数据契约层](#topic-数据契约层)
-13. [`project/` 项目装配层](#project-项目装配层)
-14. [`scripts/` Python 实验层](#scripts-python-实验层)
-15. [典型数据链路](#典型数据链路)
-16. [新增功能应该改哪里](#新增功能应该改哪里)
-17. [当前状态与边界](#当前状态与边界)
-18. [推荐阅读顺序](#推荐阅读顺序)
-19. [文档索引](#文档索引)
+9. [`init/` 启动层](#init-启动层)
+10. [`cmd/` 调试命令层](#cmd-调试命令层)
+11. [`algorithm/` 算法层](#algorithm-算法层)
+12. [`modules/` 设备模块层](#modules-设备模块层)
+13. [`topic/` 数据契约层](#topic-数据契约层)
+14. [`project/` 项目装配层](#project-项目装配层)
+15. [`scripts/` Python 实验层](#scripts-python-实验层)
+16. [典型数据链路](#典型数据链路)
+17. [新增功能应该改哪里](#新增功能应该改哪里)
+18. [当前状态与边界](#当前状态与边界)
+19. [推荐阅读顺序](#推荐阅读顺序)
+20. [文档索引](#文档索引)
 
 ---
 
@@ -99,7 +101,7 @@
 
 可以用下面这句话理解当前架构：
 
-> `tflm` 是一套以 Zephyr 为运行时基础、以 Kconfig/CMake 为编译期装配手段、以链接段注册为扩展机制、以 `drivers / modules / algorithm / topic / project` 为职责边界，并由 Python 脚本参与实验验证的模块化嵌入式框架。
+> `tflm` 是一套以 Zephyr 为运行时基础、以 Kconfig/CMake 为编译期装配手段、以链接段注册为扩展机制、以 `drivers / modules / algorithm / topic / init / cmd / project` 为职责边界，并由 Python 脚本参与实验验证的模块化嵌入式框架。
 
 再压缩成几个问题：
 
@@ -109,6 +111,7 @@
 | `modules/` | 一个具体设备如何变成可用对象 |
 | `algorithm/` | 控制、滤波、辨识和推理如何复用 |
 | `topic/` | 线程之间传什么数据，采用什么传输语义 |
+| `init/` | 已注册组件按什么顺序初始化和启动 |
 | `project/` | 当前项目使用哪些板子、模块和线程 |
 | `cmd/` | 固件运行时如何查看和修改调试变量 |
 | `scripts/` | 如何在主机侧采集、回放、拟合和分析 |
@@ -341,8 +344,12 @@ project/boards/<vendor>/<board_cfg>/openocd.cfg
 ### 总体依赖关系
 
 ```text
+                         src/main.c
+                              │
+                            init/
+                              │
                          project/
-                    apps / boards / thread
+                     boards / thread
                               │
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
@@ -402,6 +409,7 @@ project/boards/<vendor>/<board_cfg>/openocd.cfg
 | 链接段 | 用途 |
 | --- | --- |
 | `.user_init` | `REGISTER_INIT()` 初始化项 |
+| `.user_thread` | `REGISTER_THREAD()` 线程启动项 |
 | `.remote` | Remote 协议注册项 |
 | `.imu` | IMU 数据源注册项 |
 | `.can_rx1/2/3` | CAN ID 分发项 |
@@ -461,7 +469,7 @@ main()
 
 ### 当前十阶段启动顺序
 
-`project/apps/Init_entry.cpp` 当前按下面的顺序调用 `RunStage()`：
+`init/Init_entry.cpp` 当前按下面的顺序调用 `RunStage()`：
 
 ```text
 PreInit
@@ -486,13 +494,13 @@ PreInit
 当前阶段定义位于：
 
 ```text
-project/apps/Init_entry.hpp
+init/Init_entry.hpp
 ```
 
 当前启动遍历器位于：
 
 ```text
-project/apps/Init_entry.cpp
+init/Init_entry.cpp
 ```
 
 ### 当前阶段中的典型组件
@@ -533,7 +541,7 @@ bool thread_init();
 bool thread_start();
 
 REGISTER_INIT(thread_init, MidInit, Mid, "chassis_init");
-REGISTER_INIT(thread_start, MidThread, Mid, "chassis_start");
+REGISTER_THREAD(thread_start, MidThread, Mid, "chassis_start");
 ```
 
 这样做的好处是：
@@ -580,6 +588,7 @@ algorithm/
 modules/
 topic/
 cmd/
+init/
 project/
 ```
 
@@ -658,8 +667,9 @@ tflm/
 ├── algorithm/       纯计算、控制、滤波、辨识、TFLM
 ├── cmd/             固件命令、调试变量、构建辅助、链接段
 ├── drivers/         Zephyr 外设接口封装
+├── init/            启动阶段、注册表遍历和中断分发入口
 ├── modules/         IMU、Remote、电机、功率计等设备模块
-├── project/         当前项目的 apps、boards、thread
+├── project/         当前项目的 boards、thread
 ├── topic/           zbus 和 k_msgq 数据通道
 ├── scripts/         Python 实验和性能工具
 ├── src/             根入口
@@ -678,6 +688,7 @@ tflm/
 | `algorithm` | PID、EKF、RLS、数学模型 | UART、CAN、SPI 句柄 |
 | `modules` | 设备协议、状态、校准、设备能力 | 整机跨模块策略 |
 | `topic` | 消息结构、发布订阅、队列 | 线程循环、设备实例 |
+| `init` | 启动阶段、注册表遍历、中断分发入口 | 具体业务初始化逻辑 |
 | `project/thread` | 当前项目的周期业务和对象装配 | 可复用底层能力 |
 | `cmd` | 运行时调试入口、构建辅助、注册扩展 | 正式控制业务 |
 | `scripts` | 主机侧采集、分析、回放、拟合 | MCU 实时安全逻辑 |
@@ -690,6 +701,39 @@ tflm/
 ```
 
 前者通常属于框架层，后者通常属于 `project/`。
+
+---
+
+## `init/` 启动层
+
+`init/` 是当前工程的统一启动层。它把 `src/main.c` 的入口、`.user_init/.user_thread` 链接段、阶段式启动顺序和公共 CAN RX 分发入口串起来。
+
+当前核心文件：
+
+```text
+init/System_startup.h
+init/Init_entry.hpp
+init/Init_entry.cpp
+init/Irq_handlers.h
+init/Irq_handlers.cpp
+```
+
+它的职责是：
+
+- 定义 `REGISTER_INIT()` 和 `REGISTER_THREAD()`；
+- 执行 `PreInit -> PreThread -> ... -> AppThread`；
+- 按 `InitLevel` 处理启动失败；
+- 遍历 `.user_init/.user_thread`；
+- 提供 `CAN_RX_HANDLER()` 的分发入口；
+- 通过 `init/CMakeLists.txt` 接入 `cmd/linker/tflm_init.ld`。
+
+它不负责决定某个线程是否编译，也不保存具体设备状态。组件是否存在由 Kconfig/CMake 决定；组件如何初始化由各自 `.cpp` 中的本地注册函数决定。
+
+详细说明见：
+
+```text
+init/README.md
+```
 
 ---
 
@@ -1166,26 +1210,17 @@ topic 不负责：
 add_subdirectory(${PROJ_DIR})
 ```
 
-把它和 `drivers`、`modules`、`algorithm`、`topic`、`cmd` 一起编译进同一个 Zephyr app。
+把它和 `drivers`、`modules`、`algorithm`、`topic`、`cmd`、`init` 一起编译进同一个 Zephyr app。
 
-### 三个部分
+### 两个部分
 
 ```text
 project/
-├── apps/
 ├── boards/
 └── thread/
 ```
 
-#### apps
-
-负责：
-
-- 系统入口；
-- 初始化表遍历；
-- 初始化失败处理；
-- 中断回调入口；
-- 链接段边界的运行时使用。
+启动入口、初始化表遍历、中断分发入口已经上移到 `init/`。`project/` 只保留当前项目真正会变化的板级和业务线程。
 
 #### boards
 
@@ -1229,7 +1264,10 @@ user-can1
     -> drivers / modules / algorithm / topic
 
 当前项目变化
-    -> project/apps / boards / thread
+    -> project/boards / project/thread
+
+启动机制变化
+    -> init
 ```
 
 如果新增一个项目只需要换板卡、选择另一组线程和重新装配已有模块，那么框架层就可以保持稳定。
@@ -1567,7 +1605,7 @@ bool thread_init();
 bool thread_start();
 
 REGISTER_INIT(thread_init, ..., ..., "xxx_init");
-REGISTER_INIT(thread_start, ..., ..., "xxx_start");
+REGISTER_THREAD(thread_start, ..., ..., "xxx_start");
 ```
 
 项目线程负责周期和组合，不负责重新发明底层设备抽象。
@@ -1676,7 +1714,7 @@ project/boards/
 cmd/linker/tflm_init.ld
 ```
 
-不要只根据旧文档中的 `projects/`、旧启动函数或旧板级目录判断当前工程。
+不要只根据旧文档中的复数项目目录写法、旧启动函数或旧板级目录判断当前工程。
 
 ---
 
@@ -1701,8 +1739,9 @@ prj.conf
 ### 第二步：看启动和链接段
 
 ```text
-project/apps/Init_entry.hpp
-project/apps/Init_entry.cpp
+init/README.md
+init/Init_entry.hpp
+init/Init_entry.cpp
 cmd/linker/tflm_init.ld
 ```
 
@@ -1711,6 +1750,10 @@ cmd/linker/tflm_init.ld
 ```text
 REGISTER_INIT
     -> .user_init
+        -> RunStage
+
+REGISTER_THREAD
+    -> .user_thread
         -> RunStage
 ```
 
@@ -1801,6 +1844,7 @@ scripts/uart/
 - [算法层架构说明](algorithm/ARCHITECTURE.md)
 - [模块层架构说明](modules/ARCHITECTURE.md)
 - [Topic 层架构说明](topic/ARCHITECTURE.md)
+- [启动层说明](init/README.md)
 - [命令层说明](cmd/README.md)
 
 ### 重点设计
