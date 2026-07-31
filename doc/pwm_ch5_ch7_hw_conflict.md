@@ -1,50 +1,67 @@
-# PWM ch5（蜂鸣器）+ ch7（加热器）硬件冲突
-
-## 背景
-
-PWM 双通道驱动问题已修复（`pwm_deinit` + 独立 CMP），寄存器级双通道配置已正常。但蜂鸣器（pwm0 ch5, PA09）和 IMU 加热器（pwm0 ch7, PB07）在**硬件电气层面**仍然存在冲突。
+# PWM ch5（蜂鸣器）+ ch7（加热器）冲突
 
 ## 现象
 
-| 组合 | 结果 |
+PWM0 同时配置 ch5（PA09, 蜂鸣器）和 ch7（PB07, IMU 加热器）时，输出不稳定：
+
+- ~50% 概率两通道都正常
+- ~50% 概率只有第一个初始化的通道有输出
+- 单通道各自都正常
+
+## 根因
+
+**HPMicro pinctrl_soc.h 的 `Z_PINCTRL_STATE_PINS_INIT` 宏用 `DT_PHANDLE` 只解析 `pinctrl-0` 的第一个 phandle，后续 phandle 被忽略。**
+
+```dts
+pinctrl-0 = <&pinmux_a &pinmux_b>;  // 只配了 pinmux_a，pinmux_b 丢了
+```
+
+这是 HPMicro 该宏的实现限制——`DT_PHANDLE()` 只取第 0 个 phandle。不是 Zephyr 框架不支持，是 HPMicro 没实现多 phandle。
+
+## 修复
+
+两个 pin 合并到一个 pinmux 节点，`pinctrl-0` 只引用一个节点：
+
+**pinctrl dtsi** 新增：
+```dts
+pinmux_pwm0_p57: pinmux_pwm0_p57 {
+    group0 {
+        pinmux = <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTA, 9), IOC_TYPE_IOC, 0, 16)>,
+                 <HPMICRO_PINMUX(HPMICRO_PIN(HPMICRO_PORTB, 7), IOC_TYPE_IOC, 0, 16)>;
+    };
+};
+```
+
+**overlay** 改为引用合并节点：
+```dts
+&pwm0 {
+    pinctrl-0 = <&pinmux_pwm0_p57>;
+};
+```
+
+这种写法在 BSP 中已有先例（uart0、mcan0、gpiob_spi 等）。
+
+## 排查过程
+
+| 步骤 | 方法 | 发现 |
+|------|------|------|
+| PWM 寄存器 dump | trd_test.cpp 加 dump_regs() | 正常/异常组寄存器值完全一致 |
+| IOC 寄存器 dump | 加 IOC FUNC_CTL 读取 | 异常组 PB07=0x00（GPIO 模式） |
+| 单通道对比 | heater-only 烧录 | 单通道时 PB07 正常 |
+| 引脚顺序实验 | 交换 pinctrl-0 顺序 | 第一个永远正常，第二个永远异常 |
+| pinctrl 日志 | pinctrl 循环加 LOG_INF | PWM 的 pin_cnt=1，第二个没生成 |
+| 宏分析 | 查 pinctrl_soc.h | `DT_PHANDLE` 只取第 0 个 phandle |
+
+## 涉及文件
+
+| 文件 | 改动 |
 |------|------|
-| ch5 + ch7 同时配（两个引脚都接负载） | 蜂鸣器能响但波形异常（峰值约 1V），加热器不工作 |
-| 只配 ch7（去掉蜂鸣器引脚负载） | 加热器正常工作 |
+| `sdk_glue/boards/.../hpm5361icb-pinctrl.dtsi` | 新增 `pinmux_pwm0_p57` 合并节点 |
+| `project/boards/.../hpm5361icb.overlay` | `pinctrl-0` 改为 `<&pinmux_pwm0_p57>` |
+| `sdk_glue/drivers/pwm/pwm_hpmicro.c` | 移除遗留调试打印 |
+| `doc/pwm_pinctrl_fix_changelog.md` | 变更记录 |
+| `doc/pwm_pinctrl_rootcause.md` | 根因摘要+全记录 |
 
+## 注意事项
 
-| 只配 ch5（去掉加热器引脚负载） | 蜂鸣器正常工作 |
-
-## 与驱动问题的区别
-
-之前驱动 bug 导致的现象和这个类似，但不能混淆：
-
-| 维度 | 驱动问题（已修复） | 当前硬件问题 |
-|------|------------------|-------------|
-| 寄存器配置 | ch3 寄存器正常但无输出 | 两路寄存器配置正确 |
-| 触发条件 | 仅在双通道同时软件初始化时触发 | 只要两个引脚都接了负载就触发 |
-| 是否随 reboot 变化 | reset/上电后出问题 | 始终存在，不随复位变化 |
-| 波形 | 无输出（完全没波形） | 有波形但幅度异常（~1V 峰值） |
-
-## 进展
-
-| 步骤 | 结果 |
-|------|------|
-| 驱动双通道问题修复（deinit + 独立 CMP） | pwm1 ch2/ch3 正常 |
-| 发现蜂鸣器引脚电阻过小导致电压异常 | 已更换电阻，电压恢复正常 |
-| 电阻修复后仍有问题 | 待定位 |
-
-## 当前状态
-
-电压问题（~1V 峰值）已解决，但 ch5 + ch7 同时接负载时仍无法正常工作。具体现象待补充。
-
-ch5（蜂鸣器）和 ch7（加热器）不在同一个 PWM pair 内：
-- ch4/ch5 → PWM4/5 对
-- ch6/ch7 → PWM6/7 对
-
-驱动修复已确认对同 pair 的通道有效（ch2/ch3），但 ch5/ch7 分属不同 pair，可能涉及其他未发现的问题。
-
-## 待排查方向
-
-- 确认电压修复后当前的具体现象（波形、输出幅度、是否完全不工作）
-- 确认驱动修复是否已验证覆盖 pwm0（同一份驱动代码，逻辑应相同）
-- 如果驱动无问题 → 排查 PCB 走线、负载匹配、电源完整性
+HPMicro 的 pinctrl-0 **不要写成 `<&a &b>` 多 phandle 格式**，多个 pin 必须放在同一个节点内。
