@@ -11,6 +11,7 @@
 
     "python.defaultInterpreterPath": "D:\\Zephyr_HPMicro\\.venv\\Scripts\\python.exe",
     "python.terminal.activateEnvironment": true,
+
     "terminal.integrated.profiles.windows": {
         "Zephyr Shell": {
             "path": "powershell.exe",
@@ -21,9 +22,11 @@
             ]
         }
     },
+
     "terminal.integrated.defaultProfile.windows": "Zephyr Shell",
 
     "clangd.path": "C:\\Users\\33527\\AppData\\Roaming\\Code\\User\\globalStorage\\llvm-vs-code-extensions.vscode-clangd\\install\\21.1.0\\clangd_21.1.0\\bin\\clangd.exe",
+
     "clangd.arguments": [
         "--background-index",
         "--clang-tidy",
@@ -32,7 +35,7 @@
         "--query-driver=D:/Zephyr/zephyr-sdk-0.16.8/arm-zephyr-eabi/bin/arm-zephyr-eabi-g++.exe,D:/Zephyr/zephyr-sdk-0.16.8/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-g++.exe",
         "--compile-commands-dir=.",
         "--log=verbose"
-    ], 
+    ],
 
     "cortex-debug.openocdPath.windows": "D:/Zephyr_HPMicro/sdk_env/tools/openocd_backup/openocd.exe",
 
@@ -46,7 +49,20 @@
     "workbench.tree.renderIndentGuides": "always",
     "explorer.compactFolders": false,
     "explorer.enableUndo": false,
+
     "workbench.colorCustomizations": {
         "tree.indentGuidesStroke": "#00ff73"
     },
+
+    // 缩进设置
+    "editor.tabSize": 4,
+    "editor.insertSpaces": false,
+    "editor.detectIndentation": false,
+
+    // Zephyr DeviceTree / Overlay
+    "[devicetree]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": false,
+        "editor.detectIndentation": false
+    }
 }
