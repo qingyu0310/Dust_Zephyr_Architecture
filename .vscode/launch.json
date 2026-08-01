@@ -8,7 +8,7 @@
             "servertype": "openocd",
             "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
             "serverpath": "C:/Program Files/Path/openocd/bin/openocd.exe",
-            "gdbPath": "E:/Zephyr_Test/zephyr-sdk-0.16.8/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
+            "gdbPath": "E:/Zephyr/zephyr-sdk-0.16.8/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
             "runToEntryPoint": "main",
             "configFiles": [
                 "${workspaceFolder}/projects/boards/st/puzhong/openocd.cfg"
@@ -23,16 +23,16 @@
             "request": "launch",
             "servertype": "openocd",
             "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-            "serverpath": "E:/Zephyr_HPMicro_Test/sdk_env/tools/openocd/openocd.exe",
-            "gdbPath": "E:/Zephyr_Test/zephyr-sdk-0.16.8/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-gdb.exe",
+            "serverpath": "E:/Zephyr_HPMicro/sdk_env/tools/openocd/openocd.exe",
+            "gdbPath": "E:/Zephyr/zephyr-sdk-0.16.8/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-gdb.exe",
             "showDevDebugOutput": "none",
             "configFiles": [
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/probes/cmsis_dap.cfg",
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/soc/hpm5300.cfg",
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/boards/hpm5300evk.cfg"
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/probes/cmsis_dap.cfg",
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/soc/hpm5300.cfg",
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/boards/hpm5300evk.cfg"
             ],
             "searchDir": [
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd"
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd"
             ],
             "openOCDLaunchCommands": [
                 "adapter speed 500",
@@ -57,16 +57,16 @@
             "request": "attach",
             "servertype": "openocd",
             "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-            "serverpath": "E:/Zephyr_HPMicro_Test/sdk_env/tools/openocd/openocd.exe",
-            "gdbPath": "E:/Zephyr_Test/zephyr-sdk-0.16.8/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-gdb.exe",
+            "serverpath": "E:/Zephyr_HPMicro/sdk_env/tools/openocd/openocd.exe",
+            "gdbPath": "E:/Zephyr/zephyr-sdk-0.16.8/riscv64-zephyr-elf/bin/riscv64-zephyr-elf-gdb.exe",
             "showDevDebugOutput": "none",
             "configFiles": [
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/probes/cmsis_dap.cfg",
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/soc/hpm5300.cfg",
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd/boards/hpm5300evk.cfg"
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/probes/cmsis_dap.cfg",
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/soc/hpm5300.cfg",
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd/boards/hpm5300evk.cfg"
             ],
             "searchDir": [
-                "E:/Zephyr_HPMicro_Test/sdk_env/hpm_sdk/boards/openocd"
+                "E:/Zephyr_HPMicro/sdk_env/hpm_sdk/boards/openocd"
             ],
             "openOCDLaunchCommands": [
                 "adapter speed 500",

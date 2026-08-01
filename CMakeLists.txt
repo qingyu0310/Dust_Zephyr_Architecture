@@ -11,7 +11,7 @@ set(CONFIG_SYM PRJ_TEST)
 if(DEFINED ENV{SDK_GLUE_DIR})
   set(SDK_GLUE_DIR "$ENV{SDK_GLUE_DIR}")
 else()
-  set(SDK_GLUE_DIR "E:/Zephyr_HPMicro_Test/sdk_glue")
+  set(SDK_GLUE_DIR "E:/Zephyr_HPMicro/sdk_glue")
 endif()
 
 # 注册额外 board/soc/dts 搜索路径
@@ -28,7 +28,7 @@ list(APPEND DTS_ROOT "${ZEPHYR_USER_DIR}/dts")
 
 # 用户自研层 sdk_glue_user（与 sdk_glue 同级，独立 git 仓库）
 # 用 CMAKE_CURRENT_SOURCE_DIR 相对（不依赖 SDK_GLUE_DIR 环境变量的 D/E 状态）
-set(SDK_GLUE_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../Zephyr_HPMicro_Test/sdk_glue_user")
+set(SDK_GLUE_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../Zephyr_HPMicro/sdk_glue_user")
 list(APPEND BOARD_ROOT "${SDK_GLUE_USER_DIR}")
 list(APPEND SOC_ROOT "${SDK_GLUE_USER_DIR}")
 list(APPEND DTS_ROOT "${SDK_GLUE_USER_DIR}")
@@ -55,6 +55,7 @@ set(ZEPHYR_EXTRA_MODULES
   "${SDK_GLUE_DIR}"
   "${SDK_GLUE_DIR}/../modules/lib/CherryUSB"
   "${ZEPHYR_USER_DIR}/modules/usb"
+  "${ZEPHYR_USER_DIR}/modules/cmsis"
 )
 set(ZEPHYR_SDK_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../zephyr-sdk-0.16.8" CACHE PATH "")
 
@@ -76,7 +77,7 @@ target_compile_options(app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-sta
 # CMSIS 头路径（core_cm4.h 等）
 if(CONFIG_CPU_CORTEX_M)
   zephyr_include_directories("${ZEPHYR_BASE}/../modules/hal/cmsis/CMSIS/Core/Include")
-  zephyr_include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
+  zephyr_include_directories("${ZEPHYR_USER_DIR}/modules/cmsis")
   zephyr_include_directories("${ZEPHYR_USER_DIR}/modules/usb")
   zephyr_compile_definitions(__PROGRAM_START)
 endif()

@@ -31,11 +31,5 @@ rsource "project/Kconfig"
 endif
 
 
-# HAS_CMSIS_CORE is defined in both modules/cmsis/Kconfig and modules/cmsis_6/Kconfig
-# under an `if 0` block in modules/Kconfig, giving it dependency = n.
-# Pre-define it here so deps resolve to y, preventing select-with-deps=n Kconfig errors.
-config HAS_CMSIS_CORE
-	bool
-
 source "Kconfig.zephyr"
 
